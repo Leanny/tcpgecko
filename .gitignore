@@ -1,5 +1,5 @@
 # Compiled C/C++ files
 /build
 
-# Compiled ELFs
-/*.elf
+# Debug ELFs
+tcpgecko_dbg.elf

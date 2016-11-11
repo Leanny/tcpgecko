@@ -119,13 +119,13 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x03: { /* cmd_pokemem */
-				int dst, value;
+				int destination_address, value;
 				ret = recvwait(bss, clientfd, buffer, 8);
 				CHECK_ERROR(ret < 0);
 
-				dst = ((int *) buffer)[0];
+				destination_address = ((int *) buffer)[0];
 				value = ((int *) buffer)[1];
-				pygecko_memcpy((unsigned char *) dst, (unsigned char *) &value, 4);
+				pygecko_memcpy((unsigned char *) destination_address, (unsigned char *) &value, 4);
 				break;
 			}
 			case 0x04: { /* cmd_readmem */
@@ -186,30 +186,25 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x41: { /* cmd_upload */
-				unsigned char *ptr, *end, *dst;
+				unsigned char *current_address, *end_address;
 				ret = recvwait(bss, clientfd, buffer, 8);
 				CHECK_ERROR(ret < 0);
-				ptr = ((unsigned char **) buffer)[0];
-				end = ((unsigned char **) buffer)[1];
+				current_address = ((unsigned char **) buffer)[0];
+				end_address = ((unsigned char **) buffer)[1];
 
-				while (ptr != end) {
-					int len;
+				while (current_address != end_address) {
+					int length;
 
-					len = (int) (end - ptr);
-					if (len > DATA_BUFFER_SIZE)
-						len = DATA_BUFFER_SIZE;
-					if ((int) ptr >= 0x10000000 && (int) ptr <= 0x50000000) {
-						dst = ptr;
-					} else {
-						dst = buffer;
+					length = (int) (end_address - current_address);
+					if (length > DATA_BUFFER_SIZE) {
+						length = DATA_BUFFER_SIZE;
 					}
-					ret = recvwait(bss, clientfd, dst, len);
+
+					ret = recvwait(bss, clientfd, buffer, length);
 					CHECK_ERROR(ret < 0);
-					if (dst == buffer) {
-						pygecko_memcpy(ptr, buffer, (unsigned int) len);
-					}
+					pygecko_memcpy(current_address, buffer, (unsigned int) length);
 
-					ptr += len;
+					current_address += length;
 				}
 
 				sendbyte(bss, clientfd, 0xaa); /* GCACK */
