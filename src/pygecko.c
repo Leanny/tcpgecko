@@ -10,7 +10,7 @@
 struct pygecko_bss_t {
 	int error, line;
 	void *thread;
-	unsigned char stack[0x8000];
+	unsigned char stack[0x6F00];
 };
 
 #define CHECK_ERROR(cond) if (cond) { bss->line = __LINE__; goto error; }
@@ -415,8 +415,8 @@ static int CCThread(int argc, void *argv) {
 }
 
 void start_pygecko(void) {
-	unsigned int stack = (unsigned int) memalign(0x40, 0x1000);
-	stack += 0x1000;
+	unsigned int stack = (unsigned int) memalign(0x40, 0x100);
+	stack += 0x100;
 
 	/* Create the thread */
 	void *thread = memalign(0x40, 0x1000);
