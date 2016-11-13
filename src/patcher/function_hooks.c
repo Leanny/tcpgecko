@@ -17,7 +17,7 @@
 #define USE_EXTRA_LOG_FUNCTIONS   0
 
 #define DECL(res, name, ...) \
-        res (* real_ ## name)(__VA_ARGS__) __attribute__((section(".data"))); \
+        res (* real_ ## name)(__VA_ARGS__); \
         res my_ ## name(__VA_ARGS__)
 
 /* *****************************************************************************
@@ -50,7 +50,7 @@ static const struct hooks_magic_t {
 //! buffer to store our 2 instructions needed for our replacements
 //! the code will be placed in the address of that buffer - CODE_RW_BASE_OFFSET
 //! avoid this buffer to be placed in BSS and reset on start up
-volatile unsigned int fs_method_calls[sizeof(method_hooks) / sizeof(struct hooks_magic_t) * 2] __attribute__((section(".data")));
+volatile unsigned int fs_method_calls[sizeof(method_hooks) / sizeof(struct hooks_magic_t) * 2];
 
 void PatchMethodHooks(void)
 {

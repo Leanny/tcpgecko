@@ -7,7 +7,7 @@
 
 extern void my_PrepareTitle_hook(void);
 
-static unsigned int origPrepareTitleInstr __attribute__((section(".data"))) = 0;
+static unsigned int origPrepareTitleInstr = 0;
 
 static void KernelCopyData(unsigned int addr, unsigned int src, unsigned int len)
 {

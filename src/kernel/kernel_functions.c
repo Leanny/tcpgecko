@@ -6,7 +6,7 @@
 #include "pygecko.h"
 
 /* our retain data */
-ReducedCosAppXmlInfo cosAppXmlInfoStruct __attribute__((section(".data")));
+ReducedCosAppXmlInfo cosAppXmlInfoStruct;
 /*
  *  This function is a kernel hook function. It is called directly from kernel code at position 0xFFF18558.
  */

@@ -19,7 +19,7 @@ struct pygecko_bss_t {
 #define EWOULDBLOCK 6
 #define DATA_BUFFER_SIZE 0x5000
 
-unsigned char *memcpy_buffer[DATA_BUFFER_SIZE] __attribute__((section(".data")));
+unsigned char *memcpy_buffer[DATA_BUFFER_SIZE];
 
 void pygecko_memcpy(unsigned char *dst, unsigned char *src, unsigned int len) {
 	memcpy(memcpy_buffer, src, len);
@@ -212,6 +212,12 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			}
 			case 0x50: { /* cmd_status */
 				ret = sendbyte(bss, clientfd, 1); /* running */
+				CHECK_ERROR(ret < 0);
+				break;
+			}
+			case 0x51: { /* cmd_data_buffer_size */
+				((int *) buffer)[0] = DATA_BUFFER_SIZE;
+				ret = sendwait(bss, clientfd, buffer, 4);
 				CHECK_ERROR(ret < 0);
 				break;
 			}
