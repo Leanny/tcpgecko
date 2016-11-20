@@ -7,7 +7,7 @@ extern "C" {
 
 #include "os_defs.h"
 
-#define INSTALL_ADDR 0x010F4000
+#define CODE_HANDLER_INSTALL_ADDRESS 0x010F4000
 
 #define CAFE_OS_SD_PATH             "/vol/external01"
 #define SD_PATH                     "sd:"

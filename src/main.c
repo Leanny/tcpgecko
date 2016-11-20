@@ -20,13 +20,13 @@
 #include "utils/utils.h"
 #include "common/common.h"
 
-#define BUFFER_SIZE 40000
+#define FS_BUFFER_SIZE 40000
 
 int CCHandler;
 
 void startMiiMaker();
 
-char *buffer[BUFFER_SIZE];
+char *buffer[FS_BUFFER_SIZE];
 
 #define PRINT_TEXT2(x, y, ...) { snprintf(msg, 80, __VA_ARGS__); OSScreenPutFontEx(0, x, y, msg); OSScreenPutFontEx(1, x, y, msg); }
 
@@ -163,7 +163,7 @@ int Menu_Main(void) {
 				sleep(2);
 				break;
 			}
-			if (filesize > BUFFER_SIZE) {
+			if (filesize > FS_BUFFER_SIZE) {
 				OSScreenClearBufferEx(0, 0);
 				OSScreenClearBufferEx(1, 0);
 				PRINT_TEXT2(14, 5, "Codehandler.bin is too big");
@@ -176,12 +176,11 @@ int Menu_Main(void) {
 			memcpy(buffer, Badbuffer, filesize);
 			free(Badbuffer);
 
-			unsigned int phys_cafe_codehandler_loc = (unsigned int) OSEffectiveToPhysical((void *) INSTALL_ADDR);
+			unsigned int phys_cafe_codehandler_loc = (unsigned int) OSEffectiveToPhysical((void *) CODE_HANDLER_INSTALL_ADDRESS);
 
 			DCFlushRange(&buffer, filesize);
 			SC0x25_KernelCopyData((u32) phys_cafe_codehandler_loc, (int) buffer, filesize);
 			m_DCInvalidateRange((u32) phys_cafe_codehandler_loc, filesize);
-
 
 			unmount_sd_fat("sd");
 			CCHandler = 1;
@@ -191,8 +190,8 @@ int Menu_Main(void) {
 		}
 
 		// Button pressed ?
-		update_screen = (pressedButtons & (VPAD_BUTTON_LEFT | VPAD_BUTTON_RIGHT | VPAD_BUTTON_UP | VPAD_BUTTON_DOWN)) ? 1
-																												   : 0;
+		update_screen = (pressedButtons & (VPAD_BUTTON_LEFT | VPAD_BUTTON_RIGHT | VPAD_BUTTON_UP | VPAD_BUTTON_DOWN))
+						? 1 : 0;
 		usleep(20000);
 	}
 

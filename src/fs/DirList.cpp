@@ -183,10 +183,7 @@ static bool SortCallback(const DirEntry & f1, const DirEntry & f2)
 	if(f1.FilePath && !f2.FilePath) return true;
 	if(!f1.FilePath) return false;
 
-	if(strcasecmp(f1.FilePath, f2.FilePath) > 0)
-		return false;
-
-	return true;
+	return strcasecmp(f1.FilePath, f2.FilePath) <= 0;
 }
 
 void DirList::SortList()

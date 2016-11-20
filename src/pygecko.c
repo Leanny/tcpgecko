@@ -6,6 +6,10 @@
 #include "dynamic_libs/socket_functions.h"
 #include "dynamic_libs/gx2_functions.h"
 #include "kernel/syscalls.h"
+#include "dynamic_libs/fs_functions.h"
+#include "common/fs_defs.h"
+#include "diskdumper.h"
+#include "utils/utils.h"
 
 struct pygecko_bss_t {
 	int error, line;
@@ -13,10 +17,13 @@ struct pygecko_bss_t {
 	unsigned char stack[0x6F00];
 };
 
+int validateAddressRange(int starting_address, int ending_address);
+
 #define CHECK_ERROR(cond) if (cond) { bss->line = __LINE__; goto error; }
 #define errno (*__gh_errno_ptr())
 #define MSG_DONTWAIT 32
 #define EWOULDBLOCK 6
+#define FS_BUFFER_SIZE 0x1000
 #define DATA_BUFFER_SIZE 0x5000
 
 unsigned char *memcpy_buffer[DATA_BUFFER_SIZE];
@@ -80,6 +87,79 @@ static int sendbyte(struct pygecko_bss_t *bss, int sock, unsigned char byte) {
 
 	buffer[0] = byte;
 	return sendwait(bss, sock, buffer, 1);
+}
+
+/*static void DumpFile(void *client, void *commandBlock, SendData *sendData, char *path, unsigned int fileSize) {
+	sendData->tag = 0x02;
+	memcpy(&sendData->data[0], &fileSize, 4);
+	sendData->length = snprintf((char *) sendData->data + 4, FS_BUFFER_SIZE - 4, "%s", path) + 4 + 1;
+	// sendwait(iClientSocket, sendData, sizeof(SendData) + sendData->length);
+
+	int ret = 0; // recvwait(iClientSocket, (char*)sendData, sizeof(SendData) + 1);
+	if (ret < (int) (sizeof(SendData) + 1) || (sendData->data[0] != 1)) {
+		return;
+	}
+
+	unsigned char *dataBuffer = (unsigned char *) memalign(0x40, FS_BUFFER_SIZE);
+	if (!dataBuffer) {
+		return;
+	}
+
+	int fileDescriptor = 0;
+	if (FSOpenFile(client, commandBlock, path, "r", &fileDescriptor, -1) != FS_STATUS_OK) {
+		free(dataBuffer);
+		sendData->tag = 0x04;
+		sendData->length = 0;
+		// sendwait(iClientSocket, sendData, sizeof(SendData) + sendData->length);
+		return;
+	}
+
+	// Copy rpl in memory
+	while ((ret = FSReadFile(client, commandBlock, dataBuffer, 0x1, FS_BUFFER_SIZE, fileDescriptor, 0, -1)) > 0) {
+		sendData->tag = 0x03;
+		sendData->length = ret;
+		memcpy(sendData->data, dataBuffer, sendData->length);
+
+		// if(sendwait(iClientSocket, sendData, sizeof(SendData) + sendData->length) < 0) {
+		//	break;
+		// }
+	}
+
+	sendData->tag = 0x04;
+	sendData->length = 0;
+	// sendwait(iClientSocket, sendData, sizeof(SendData) + sendData->length);
+
+	FSCloseFile(client, commandBlock, fileDescriptor, -1);
+	free(dataBuffer);
+}*/
+
+static int sendDirectoryData(void *client, void *commandBlock, SendData *sendData, char *path) {
+	int dataHandle = 0;
+
+	sendData->tag = 0x01;
+	sendData->length = snprintf((char *) sendData->data, FS_BUFFER_SIZE, "%s", path) + 1;
+	// sendwait(iClientSocket, sendData, sizeof(SendData) + sendData->length);
+
+	if (FSOpenDir(client, commandBlock, path, &dataHandle, -1) != 0) {
+		return -1;
+	}
+
+	FSDirEntry *dirEntry = (FSDirEntry *) malloc(sizeof(FSDirEntry));
+
+	while (FSReadDir(client, commandBlock, dataHandle, dirEntry, -1) == 0) {
+		int pathLength = strlen(path);
+		snprintf(path + pathLength, FS_MAX_FULLPATH_SIZE - pathLength, "/%s", dirEntry->name);
+
+		if (dirEntry->stat.flag & 0x80000000) {
+			sendDirectoryData(client, commandBlock, sendData, path);
+		} else {
+			// DumpFile(client, commandBlock, sendData, path, dirEntry->stat.size);
+		}
+		path[pathLength] = 0;
+	}
+	free(dirEntry);
+	FSCloseDir(client, commandBlock, dataHandle, -1);
+	return 0;
 }
 
 static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
@@ -148,6 +228,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 						ret = sendbyte(bss, clientfd, 0xb0);
 						CHECK_ERROR(ret < 0);
 					} else {
+						// TODO Compression of ptr, sending of status, compressed size and data, length: 1 + 4 + len(data)
 						memcpy(buffer + 1, ptr, len);
 						buffer[0] = 0xbd;
 						ret = sendwait(bss, clientfd, buffer, len + 1);
@@ -159,6 +240,38 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 						goto next_cmd;
 					ptr += len;
 				}
+				break;
+			}
+			case 0x05: { /* cmd_validate_address */
+				// TODO Test
+
+				// Receive the address
+				ret = recvwait(bss, clientfd, buffer, 4);
+				CHECK_ERROR(ret < 0);
+
+				// Make the address pointer
+				void *address_pointer = ((void **) buffer)[0];
+
+				// Validate
+				int is_address_valid = OSIsAddressValid(address_pointer);
+
+				// Send the result
+				sendbyte(bss, clientfd, (unsigned char) is_address_valid);
+				break;
+			}
+			case 0x06: { /* cmd_validate_address_range */
+				// TODO Test
+
+				ret = recvwait(bss, clientfd, buffer, 8);
+				CHECK_ERROR(ret < 0);
+
+				// Retrieve the data
+				int starting_address = ((int *) buffer)[0];
+				int ending_address = ((int *) buffer)[1];
+
+				int is_address_range_valid = validateAddressRange(starting_address, ending_address);
+
+				sendbyte(bss, clientfd, (unsigned char) is_address_range_valid);
 				break;
 			}
 			case 0x0b: { /* cmd_writekern */
@@ -219,6 +332,44 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				((int *) buffer)[0] = DATA_BUFFER_SIZE;
 				ret = sendwait(bss, clientfd, buffer, 4);
 				CHECK_ERROR(ret < 0);
+				break;
+			}
+			case 0x52: { /* cmd_read_file */
+				// TODO
+			}
+			case 0x53: { /* cmd_read_directory */
+				// TODO
+				FSInit();
+
+				void *commandBlock = malloc(FS_CMD_BLOCK_SIZE);
+				FSInitCmdBlock(commandBlock);
+
+				void *client = malloc(FS_CLIENT_SIZE);
+				FSAddClientEx(client, 0, -1);
+
+				char *path = (char *) malloc(FS_MAX_FULLPATH_SIZE);
+				strcpy(path, "/vol/content");
+
+				SendData *sendData = (SendData *) memalign(0x20, ALIGN32(sizeof(SendData) + FS_BUFFER_SIZE));
+
+				sendDirectoryData(client, commandBlock, sendData, path);
+
+				FSDelClient(client);
+				FSShutdown();
+				free(commandBlock);
+				free(client);
+				free(path);
+
+				break;
+			}
+			case 0x54: { /* cmd_replace_file */
+				// TODO
+			}
+			case 0x55: { /* cmd_code_handler_install_address */
+				((int *) buffer)[0] = CODE_HANDLER_INSTALL_ADDRESS;
+				ret = sendwait(bss, clientfd, buffer, 4);
+				CHECK_ERROR(ret < 0);
+
 				break;
 			}
 			case 0x70: { /* cmd_rpc */
@@ -349,6 +500,20 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	return 0;
 }
 
+/*Validates the address range (last address inclusive) */
+int validateAddressRange(int starting_address, int ending_address) {
+	// __OSValidateAddressSpaceRange(1, (void *) starting_address, ending_address - starting_address);
+	for (int current_address = starting_address; current_address <= ending_address; current_address++) {
+		int is_current_address_valid = OSIsAddressValid((void *) current_address);
+
+		if (!is_current_address_valid) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
 static int start(int argc, void *argv) {
 	int sockfd = -1, clientfd = -1, ret = 0, len;
 	struct sockaddr_in addr;
@@ -360,7 +525,7 @@ static int start(int argc, void *argv) {
 		addr.sin_family = AF_INET;
 		addr.sin_port = 7331;
 		addr.sin_addr.s_addr = 0;
-		sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);  //open a file handle to socket
+		sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 		CHECK_ERROR(sockfd == -1);
 		ret = bind(sockfd, (void *) &addr, 16);
 		CHECK_ERROR(ret < 0);
@@ -404,7 +569,7 @@ static int CCThread(int argc, void *argv) {
 	}
 
 	if (CCHandler == 1) {
-		void (*entrypoint)() = (void *) INSTALL_ADDR;
+		void (*entrypoint)() = (void *) CODE_HANDLER_INSTALL_ADDRESS;
 
 		while (1) {
 			usleep(9000);
@@ -414,11 +579,30 @@ static int CCThread(int argc, void *argv) {
 	return 0;
 }
 
+/*void start_pygecko(void) {
+	struct pygecko_bss_t *bss;
+
+	unsigned int stack = (unsigned int) memalign(0x40, 0x100);
+	stack += 0x100;
+
+	bss = memalign(0x40, sizeof(struct pygecko_bss_t));
+	if (bss == 0)
+		return;
+	memset(bss, 0, sizeof(struct pygecko_bss_t));
+
+	if (OSCreateThread(&bss->thread, start, 1, bss, (u32) bss->stack + sizeof(bss->stack), sizeof(bss->stack), 0,
+					   0xc) == 1) {
+		OSResumeThread(&bss->thread);
+	} else {
+		free(bss);
+	}
+}*/
+
 void start_pygecko(void) {
 	unsigned int stack = (unsigned int) memalign(0x40, 0x100);
 	stack += 0x100;
 
-	/* Create the thread */
+	// Create the thread
 	void *thread = memalign(0x40, 0x1000);
 
 	if (OSCreateThread(thread, CCThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0, 2 | 0x10 | 8) == 1) {

@@ -65,89 +65,134 @@ extern "C" {
 
 /* Handle for coreinit */
 extern unsigned int coreinit_handle;
+
 void InitOSFunctionPointers(void);
+
 void InitAcquireOS(void);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! Lib handle functions
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-extern int (* OSDynLoad_Acquire)(const char* rpl, u32 *handle);
-extern int (* OSDynLoad_FindExport)(u32 handle, int isdata, const char *symbol, void *address);
+extern int (*OSDynLoad_Acquire)(const char *rpl, u32 *handle);
+
+extern int (*OSDynLoad_FindExport)(u32 handle, int isdata, const char *symbol, void *address);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! Security functions
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-extern int (* OSGetSecurityLevel)(void);
-extern void (* __OSSetCoreTrace)(int core);
+extern int (*OSGetSecurityLevel)(void);
+
+extern void (*__OSSetCoreTrace)(int core);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! Thread functions
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-extern int (* OSCreateThread)(void *thread, s32 (*callback)(s32, void*), s32 argc, void *args, u32 stack, u32 stack_size, s32 priority, u32 attr);
-extern int (* OSResumeThread)(void *thread);
-extern int (* OSSleepThread)(void *thread);
-extern int (* OSWakeupThread)(void *thread);
-extern int (* OSSetThreadName)(void *thread, const char* name);
-extern int (* OSSuspendThread)(void *thread);
-extern int (* OSIsThreadTerminated)(void *thread);
-extern int (* OSIsThreadSuspended)(void *thread);
-extern int (* OSJoinThread)(void * thread, int * ret_val);
-extern int (* OSSetThreadPriority)(void * thread, int priority);
-extern void (* OSDetachThread)(void * thread);
-extern void (* OSSleepTicks)(u64 ticks);
-extern u64 (* OSGetTick)(void);
+extern int
+(*OSCreateThread)(void *thread, s32 (*callback)(s32, void *), s32 argc, void *args, u32 stack, u32 stack_size,
+				  s32 priority, u32 attr);
+
+extern int (*OSResumeThread)(void *thread);
+
+extern int (*OSSleepThread)(void *thread);
+
+extern int (*OSWakeupThread)(void *thread);
+
+extern int (*OSSetThreadName)(void *thread, const char *name);
+
+extern int (*OSSuspendThread)(void *thread);
+
+extern int (*OSIsThreadTerminated)(void *thread);
+
+extern int (*OSIsThreadSuspended)(void *thread);
+
+extern int (*OSJoinThread)(void *thread, int *ret_val);
+
+extern int (*OSSetThreadPriority)(void *thread, int priority);
+
+extern void (*OSDetachThread)(void *thread);
+
+extern void (*OSSleepTicks)(u64 ticks);
+
+extern u64 (*OSGetTick)(void);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! Mutex functions
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-extern void (* OSInitMutex)(void* mutex);
-extern void (* OSLockMutex)(void* mutex);
-extern void (* OSUnlockMutex)(void* mutex);
-extern int (* OSTryLockMutex)(void* mutex);
+extern void (*OSInitMutex)(void *mutex);
+
+extern void (*OSLockMutex)(void *mutex);
+
+extern void (*OSUnlockMutex)(void *mutex);
+
+extern int (*OSTryLockMutex)(void *mutex);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! System functions
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-extern u64 (* OSGetTitleID)(void);
-extern void (* __Exit)(void);
-extern void (* OSFatal)(const char* msg);
-extern void (* DCFlushRange)(const void *addr, u32 length);
-extern void (* ICInvalidateRange)(const void *addr, u32 length);
-extern void* (* OSEffectiveToPhysical)(const void*);
-extern int (* __os_snprintf)(char* s, int n, const char * format, ...);
-extern int * (* __gh_errno_ptr)(void);
+extern u64 (*OSGetTitleID)(void);
+
+extern void (*__Exit)(void);
+
+extern void (*OSFatal)(const char *msg);
+
+extern void (*DCFlushRange)(const void *addr, u32 length);
+
+extern void (*ICInvalidateRange)(const void *addr, u32 length);
+
+extern void *(*OSEffectiveToPhysical)(const void *);
+
+extern int (*OSIsAddressValid)(const void *);
+
+extern int (*__OSValidateAddressSpaceRange)(int dummyTrue, void *address, int size);
+
+extern int (*__os_snprintf)(char *s, int n, const char *format, ...);
+
+extern int *(*__gh_errno_ptr)(void);
 
 extern void (*OSScreenInit)(void);
+
 extern unsigned int (*OSScreenGetBufferSizeEx)(unsigned int bufferNum);
-extern int (*OSScreenSetBufferEx)(unsigned int bufferNum, void * addr);
+
+extern int (*OSScreenSetBufferEx)(unsigned int bufferNum, void *addr);
+
 extern int (*OSScreenClearBufferEx)(unsigned int bufferNum, unsigned int temp);
+
 extern int (*OSScreenFlipBuffersEx)(unsigned int bufferNum);
-extern int (*OSScreenPutFontEx)(unsigned int bufferNum, unsigned int posX, unsigned int posY, const char * buffer);
+
+extern int (*OSScreenPutFontEx)(unsigned int bufferNum, unsigned int posX, unsigned int posY, const char *buffer);
+
 extern int (*OSScreenEnableEx)(unsigned int bufferNum, int enable);
 
-typedef unsigned char (*exception_callback)(void * interruptedContext);
-extern void (* OSSetExceptionCallback)(u8 exceptionType, exception_callback newCallback);
+typedef unsigned char (*exception_callback)(void *interruptedContext);
+
+extern void (*OSSetExceptionCallback)(u8 exceptionType, exception_callback newCallback);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! MCP functions
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-extern int (* MCP_Open)(void);
-extern int (* MCP_Close)(int handle);
-extern int (* MCP_GetOwnTitleInfo)(int handle, void * data);
+extern int (*MCP_Open)(void);
+
+extern int (*MCP_Close)(int handle);
+
+extern int (*MCP_GetOwnTitleInfo)(int handle, void *data);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! LOADER functions
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-extern int (* LiWaitIopComplete)(int unknown_syscall_arg_r3, int * remaining_bytes);
-extern int (* LiWaitIopCompleteWithInterrupts)(int unknown_syscall_arg_r3, int * remaining_bytes);
-extern void (* addr_LiWaitOneChunk)(void);
-extern void (* addr_sgIsLoadingBuffer)(void);
-extern void (* addr_gDynloadInitialized)(void);
+extern int (*LiWaitIopComplete)(int unknown_syscall_arg_r3, int *remaining_bytes);
+
+extern int (*LiWaitIopCompleteWithInterrupts)(int unknown_syscall_arg_r3, int *remaining_bytes);
+
+extern void (*addr_LiWaitOneChunk)(void);
+
+extern void (*addr_sgIsLoadingBuffer)(void);
+
+extern void (*addr_gDynloadInitialized)(void);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! Kernel function addresses
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-extern void (* addr_PrepareTitle_hook)(void);
+extern void (*addr_PrepareTitle_hook)(void);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! Other function addresses
