@@ -335,10 +335,86 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x52: { /* cmd_read_file */
-				// TODO
+
+				// Receive the file path length
+				ret = recvwait(bss, clientfd, buffer, 4);
+				CHECK_ERROR(ret < 0)
+				int file_path_length = ((int *) buffer)[0];
+
+				// Receive the file path string itself
+				ret = recvwait(bss, clientfd, buffer, file_path_length);
+				CHECK_ERROR(ret < 0)
+				char *file_path = (char *) malloc(FS_MAX_FULLPATH_SIZE);
+				strcpy(file_path, (char *) buffer);
+
+				int BUFFER_SIZE = 0x1000;
+
+				// ####### Initialize ########
+				FSInit();
+
+				void *client = malloc(FS_CLIENT_SIZE);
+				int clientAdded = FSAddClientEx(client, 0, -1);
+
+				void *commandBlock = malloc(FS_CMD_BLOCK_SIZE);
+				FSInitCmdBlock(commandBlock);
+
+				unsigned char *dataBuffer = (unsigned char *) memalign(0x40, BUFFER_SIZE);
+
+				int fileDescriptor = 0;
+				int directoryHandle = 0;
+				FSOpenDir(client, commandBlock, "/vol/content", &directoryHandle, -1);
+
+				FSDirEntry *dirEntry = (FSDirEntry *) malloc(sizeof(FSDirEntry));
+				FSReadDir(client, commandBlock, directoryHandle, dirEntry, -1);
+				FSOpenFile(client, commandBlock, file_path, "r", &fileDescriptor, -1);
+
+				unsigned int total_file_size = 0;
+				int bytes_read;
+
+				while ((bytes_read = FSReadFile(client, commandBlock, dataBuffer, 0x1, BUFFER_SIZE, fileDescriptor,
+												0, -1)) > 0) {
+					total_file_size += bytes_read;
+				}
+
+				FSCloseFile(client, commandBlock, fileDescriptor, -1);
+				FSCloseDir(client, commandBlock, directoryHandle, -1);
+
+				((int *) buffer)[0] = total_file_size;
+
+				// ((int *) buffer)[0] = file_path_length;
+				ret = sendwait(bss, clientfd, buffer, 4);
+				CHECK_ERROR(ret < 0)
+
+				strcpy((char *) buffer, file_path);
+				ret = sendwait(bss, clientfd, buffer, file_path_length);
+				CHECK_ERROR(ret < 0)
+
+				// ##### Clean up ######
+				if (dirEntry) {
+					free(dirEntry);
+				}
+				if (file_path) {
+					free(file_path);
+				}
+				if (dataBuffer) {
+					free(dataBuffer);
+				}
+				if (commandBlock) {
+					free(commandBlock);
+				}
+				if (clientAdded) {
+					FSDelClient(client);
+				}
+				if (client) {
+					free(client);
+				}
+
+				/*ret = sendwait(bss, clientfd, buffer, 4);
+				CHECK_ERROR(ret < 0);*/
+				break;
 			}
 			case 0x53: { /* cmd_read_directory */
-				// TODO
+				// TODO Crashes (somewhere in this function)
 				FSInit();
 
 				void *commandBlock = malloc(FS_CMD_BLOCK_SIZE);
@@ -400,6 +476,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			case 0x71: { /* cmd_getsymbol */
 				int size = recvbyte(bss, clientfd);
 				CHECK_ERROR(size < 0);
+
 				ret = recvwait(bss, clientfd, buffer, size);
 				CHECK_ERROR(ret < 0);
 
@@ -500,7 +577,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	return 0;
 }
 
-/*Validates the address range (last address inclusive) */
+/*Validates the address range (last address inclusive) but is SLOW on bigger ranges */
 int validateAddressRange(int starting_address, int ending_address) {
 	// __OSValidateAddressSpaceRange(1, (void *) starting_address, ending_address - starting_address);
 	for (int current_address = starting_address; current_address <= ending_address; current_address++) {
