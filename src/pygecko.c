@@ -335,8 +335,86 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x52: { /* cmd_read_file */
-
 				// Receive the file path length
+				ret = recvwait(bss, clientfd, buffer, 4);
+				CHECK_ERROR(ret < 0)
+				int file_path_length = ((int *) buffer)[0];
+
+				// Receive the file path string itself
+				ret = recvwait(bss, clientfd, buffer, file_path_length);
+				CHECK_ERROR(ret < 0)
+
+				int status = FSInit();
+				// int BUFFER_SIZE = 0x1000;
+
+				if (status == FS_STATUS_OK) {
+					void *client = malloc(FS_CLIENT_SIZE);
+
+					if (client) {
+						status = FSAddClientEx(client, 0, -1);
+
+						if (status == FS_STATUS_OK) {
+							char *file_path = (char *) malloc(FS_MAX_FULLPATH_SIZE);
+
+							if (file_path) {
+								strcpy(file_path, (char *) buffer);
+
+								void *commandBlock = malloc(FS_CMD_BLOCK_SIZE);
+
+								if (commandBlock) {
+									FSInitCmdBlock(commandBlock);
+
+									int handle;
+									status = FSOpenFile(client, commandBlock, file_path, "r", &handle, -1);
+
+									if (status == FS_STATUS_OK) {
+										// TODO Do work
+
+										status = FSCloseFile(client, commandBlock, handle, -1);
+
+										if (status != FS_STATUS_OK) {
+											((int *) buffer)[0] = status;
+											ret = sendwait(bss, clientfd, buffer, 4);
+											CHECK_ERROR(ret < 0);
+
+											break;
+										}
+									}
+
+									/*unsigned char *dataBuffer = (unsigned char *) memalign(0x40, BUFFER_SIZE);
+
+									if (dataBuffer) {
+
+
+										free(dataBuffer);
+									}*/
+
+									free(commandBlock);
+								}
+								free(file_path);
+							}
+							status = FSDelClient(client);
+
+							if (status != FS_STATUS_OK) {
+								((int *) buffer)[0] = status;
+								ret = sendwait(bss, clientfd, buffer, 4);
+								CHECK_ERROR(ret < 0);
+
+								break;
+							}
+						}
+
+						free(client);
+					}
+				}
+
+				((int *) buffer)[0] = status;
+				ret = sendwait(bss, clientfd, buffer, 4);
+				CHECK_ERROR(ret < 0);
+
+				break;
+
+				/*// Receive the file path length
 				ret = recvwait(bss, clientfd, buffer, 4);
 				CHECK_ERROR(ret < 0)
 				int file_path_length = ((int *) buffer)[0];
@@ -407,11 +485,11 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				}
 				if (client) {
 					free(client);
-				}
+				}*/
 
 				/*ret = sendwait(bss, clientfd, buffer, 4);
 				CHECK_ERROR(ret < 0);*/
-				break;
+				// break;
 			}
 			case 0x53: { /* cmd_read_directory */
 				// TODO Crashes (somewhere in this function)
@@ -443,6 +521,41 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			}
 			case 0x55: { /* cmd_code_handler_install_address */
 				((int *) buffer)[0] = CODE_HANDLER_INSTALL_ADDRESS;
+				ret = sendwait(bss, clientfd, buffer, 4);
+				CHECK_ERROR(ret < 0);
+
+				break;
+			}
+			case 0x60: { /* cmd_follow_pointer */
+				ret = recvwait(bss, clientfd, buffer, 8);
+				CHECK_ERROR(ret < 0);
+
+				int baseAddress = ((int *) buffer)[0];
+				int offsetsCount = ((int *) buffer)[1];
+
+				ret = recvwait(bss, clientfd, buffer, offsetsCount * 4);
+				CHECK_ERROR(ret < 0);
+				int *offsets = (int *) buffer;
+
+				int destinationAddress = baseAddress;
+
+				for (int offsetIndex = 0; offsetIndex < offsetsCount; offsetIndex++) {
+					int pointerValue = *(int *) destinationAddress;
+					int offset = offsets[offsetIndex];
+					destinationAddress = pointerValue + offset;
+
+					bool isValidDestinationAddress = OSIsAddressValid((const void *) destinationAddress)
+													 && destinationAddress >= 0x10000000
+													 && destinationAddress < 0x50000000;
+
+					if (!isValidDestinationAddress) {
+						destinationAddress = -1;
+
+						break;
+					}
+				}
+
+				((int *) buffer)[0] = destinationAddress;
 				ret = sendwait(bss, clientfd, buffer, 4);
 				CHECK_ERROR(ret < 0);
 
