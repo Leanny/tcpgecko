@@ -136,6 +136,10 @@ EXPORT_DECL(int, OSScreenPutFontEx, unsigned int bufferNum, unsigned int posX, u
 
 EXPORT_DECL(int, OSScreenEnableEx, unsigned int bufferNum, int enable);
 
+EXPORT_DECL(int, OSAllocFromSystem, unsigned int size, unsigned int align);
+
+EXPORT_DECL(int, OSFreeToSystem, void* ptr);
+
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! Memory functions
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -228,6 +232,8 @@ void InitOSFunctionPointers(void) {
 	// OS_FIND_EXPORT(coreinit_handle, );
 	OS_FIND_EXPORT(coreinit_handle, __os_snprintf);
 	OS_FIND_EXPORT(coreinit_handle, __gh_errno_ptr);
+	OS_FIND_EXPORT(coreinit_handle, OSAllocFromSystem);
+	OS_FIND_EXPORT(coreinit_handle, OSFreeToSystem);
 
 	OSDynLoad_FindExport(coreinit_handle, 0, "_Exit", &__Exit);
 

@@ -167,6 +167,10 @@ typedef unsigned char (*exception_callback)(void *interruptedContext);
 
 extern void (*OSSetExceptionCallback)(u8 exceptionType, exception_callback newCallback);
 
+extern int (*OSAllocFromSystem)(unsigned int size, unsigned int align);
+
+extern int (*OSFreeToSystem)(void *aPtr);
+
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! MCP functions
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
