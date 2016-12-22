@@ -32,6 +32,8 @@ extern "C" {
 #define FS_SOURCETYPE_EXTERNAL          0
 #define FS_SOURCETYPE_HFIO              1
 #define FS_SOURCETYPE_HFIO              1
+/* FS data buffer alignment */
+#define FS_IO_BUFFER_ALIGN              64
 
 #define FS_MOUNT_SOURCE_SIZE            0x300
 #define FS_CLIENT_SIZE                  0x1700

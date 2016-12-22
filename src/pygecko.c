@@ -8,16 +8,12 @@
 #include "kernel/syscalls.h"
 #include "dynamic_libs/fs_functions.h"
 #include "common/fs_defs.h"
-#include "diskdumper.h"
-#include "utils/utils.h"
 
 struct pygecko_bss_t {
 	int error, line;
 	void *thread;
 	unsigned char stack[0x6F00];
 };
-
-int validateAddressRange(int starting_address, int ending_address);
 
 #define CHECK_ERROR(cond) if (cond) { bss->line = __LINE__; goto error; }
 #define errno (*__gh_errno_ptr())
@@ -54,10 +50,24 @@ int validateAddressRange(int starting_address, int ending_address);
         OSFatal(buffer); \
     } \
 
-// TODO Is this allocation needed?
+/*Validates the address range (last address inclusive) but is SLOW on bigger ranges */
+static int validateAddressRange(int starting_address, int ending_address) {
+	// __OSValidateAddressSpaceRange(1, (void *) starting_address, ending_address - starting_address);
+	for (int current_address = starting_address; current_address <= ending_address; current_address++) {
+		int is_current_address_valid = OSIsAddressValid((void *) current_address);
+
+		if (!is_current_address_valid) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
 unsigned char *memcpy_buffer[DATA_BUFFER_SIZE];
 
 void pygecko_memcpy(unsigned char *destinationBuffer, unsigned char *sourceBuffer, unsigned int length) {
+
 	memcpy(memcpy_buffer, sourceBuffer, length);
 	SC0x25_KernelCopyData((unsigned int) OSEffectiveToPhysical(destinationBuffer), (unsigned int) &memcpy_buffer,
 						  length);
@@ -163,7 +173,7 @@ static int sendbyte(struct pygecko_bss_t *bss, int sock, unsigned char byte) {
 	free(dataBuffer);
 }*/
 
-static int sendDirectoryData(void *client, void *commandBlock, SendData *sendData, char *path) {
+/*static int sendDirectoryData(void *client, void *commandBlock, SendData *sendData, char *path) {
 	int dataHandle = 0;
 
 	sendData->tag = 0x01;
@@ -190,7 +200,7 @@ static int sendDirectoryData(void *client, void *commandBlock, SendData *sendDat
 	free(dirEntry);
 	FSCloseDir(client, commandBlock, dataHandle, -1);
 	return 0;
-}
+}*/
 
 static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	int ret;
@@ -198,6 +208,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	// Hold the command and the data
 	unsigned char buffer[1 + DATA_BUFFER_SIZE];
 
+	// Run the RPC server
 	while (1) {
 		ret = checkbyte(clientfd);
 
@@ -409,6 +420,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					CHECK_ALLOCATED(client, "Command block")
 
 					FSInitCmdBlock(commandBlock);
+					// dumpFile(bss, clientfd, ret, buffer, file_path, client, commandBlock);
 
 					// Open the file
 					int handle;
@@ -461,9 +473,11 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					}
 
 					free(commandBlock);
-					FSDelClient(client);
+					ret = FSDelClient(client);
+					CHECK_FUNCTION_FAILED(ret, "FSDelClient");
 					free(client);
-					FSShutdown();
+					ret = FSShutdown();
+					CHECK_FUNCTION_FAILED(ret, "FSShutdown");
 				} else {
 					OSFatal("File path length exceeded");
 				}
@@ -471,62 +485,276 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x53: { /* cmd_read_directory */
-				// TODO Crashes (somewhere in this function)
-				FSInit();
+				char directory_path[FS_MAX_FULLPATH_SIZE] = {0};
 
-				void *commandBlock = malloc(FS_CMD_BLOCK_SIZE);
-				FSInitCmdBlock(commandBlock);
+				// Receive the directory path length
+				ret = recvwait(bss, clientfd, buffer, 4);
+				CHECK_FUNCTION_FAILED(ret, "recvwait (directory path length)");
+				int directory_path_length = ((int *) buffer)[0];
 
-				void *client = malloc(FS_CLIENT_SIZE);
-				FSAddClientEx(client, 0, -1);
+				if (directory_path_length >= 0 &&
+					directory_path_length <= FS_MAX_FULLPATH_SIZE) {
+					// Receive the file path string
+					ret = recvwait(bss, clientfd, buffer, directory_path_length);
+					CHECK_FUNCTION_FAILED(ret, "recvwait (directory path)");
+					strcpy(directory_path, (char *) buffer);
 
-				char *path = (char *) malloc(FS_MAX_FULLPATH_SIZE);
-				strcpy(path, "/vol/content");
+					// Initialize the file system
+					ret = FSInit();
+					CHECK_FUNCTION_FAILED(ret, "FSInit")
 
-				SendData *sendData = (SendData *) memalign(0x20, ALIGN32(sizeof(SendData) + FS_BUFFER_SIZE));
+					// Allocate the client
+					void *client = malloc(FS_CLIENT_SIZE);
+					CHECK_ALLOCATED(client, "Client")
 
-				sendDirectoryData(client, commandBlock, sendData, path);
+					// Register the client
+					ret = FSAddClientEx(client, 0, -1);
+					CHECK_FUNCTION_FAILED(ret, "FSAddClientEx")
 
-				FSDelClient(client);
-				FSShutdown();
-				free(commandBlock);
-				free(client);
-				free(path);
+					// Allocate the command block
+					void *commandBlock = malloc(FS_CMD_BLOCK_SIZE);
+					CHECK_ALLOCATED(client, "Command block")
+
+					FSInitCmdBlock(commandBlock);
+
+					int handle;
+					FSDirEntry entry;
+
+					ret = FSOpenDir(client, commandBlock, directory_path, &handle, -1);
+
+					if (ret == FS_STATUS_OK) {
+						// Send the success status
+						((int *) buffer)[0] = ret;
+						ret = sendwait(bss, clientfd, buffer, 4);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (success status)")
+
+						int entrySize = sizeof(FSDirEntry);
+
+						// Read every entry in the given directory
+						while (FSReadDir(client, commandBlock, handle, &entry, -1) == FS_STATUS_OK) {
+							// Let the client know how much data is going to be sent (even though this is constant)
+							((int *) buffer)[0] = entrySize;
+							ret = sendwait(bss, clientfd, buffer, 4);
+							CHECK_FUNCTION_FAILED(ret, "sendwait (data coming)")
+
+							// Send the struct
+							ret = sendwait(bss, clientfd, &entry, entrySize);
+							CHECK_FUNCTION_FAILED(ret, "sendwait (directory entry)")
+						}
+
+						// No more data will be sent, hence a 0 byte
+						((int *) buffer)[0] = 0;
+						ret = sendwait(bss, clientfd, buffer, 4);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (no more data)")
+
+						// Done, close the directory also
+						ret = FSCloseDir(client, commandBlock, handle, -1);
+						CHECK_FUNCTION_FAILED(ret, "FSCloseDir")
+					} else {
+						// Send the status
+						((int *) buffer)[0] = ret;
+						ret = sendwait(bss, clientfd, buffer, 4);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (error status)")
+					}
+
+					// Clean up allocations
+					free(commandBlock);
+					ret = FSDelClient(client);
+					CHECK_FUNCTION_FAILED(ret, "FSDelClient");
+					free(client);
+					ret = FSShutdown();
+					CHECK_FUNCTION_FAILED(ret, "FSShutdown");
+				} else {
+					OSFatal("Directory path length exceeded");
+				}
 
 				break;
 			}
 			case 0x54: { /* cmd_replace_file */
 				// TODO
+				char file_path[FS_MAX_FULLPATH_SIZE] = {0};
+
+				// Receive the file path length
+				ret = recvwait(bss, clientfd, buffer, 4);
+				CHECK_FUNCTION_FAILED(ret, "recvwait (file path length)");
+				int file_path_length = ((int *) buffer)[0];
+				// ASSERT_INTEGER(file_path_length, 41, "File path")
+
+				if (file_path_length >= 0 &&
+					file_path_length <= FS_MAX_FULLPATH_SIZE) {
+					// Receive the file path string
+					ret = recvwait(bss, clientfd, buffer, file_path_length);
+					CHECK_FUNCTION_FAILED(ret, "recvwait (file path)");
+					strcpy(file_path, (char *) buffer);
+					// ASSERT_STRING(file_path, "/vol/content/afghanistan_gump_arena.ipak");
+
+					// Initialize the file system
+					ret = FSInit();
+					CHECK_FUNCTION_FAILED(ret, "FSInit")
+
+					// Allocate the client
+					void *client = malloc(FS_CLIENT_SIZE);
+					CHECK_ALLOCATED(client, "Client")
+
+					// Register the client
+					ret = FSAddClientEx(client, 0, -1);
+					CHECK_FUNCTION_FAILED(ret, "FSAddClientEx")
+
+					// Allocate the command block
+					void *commandBlock = malloc(FS_CMD_BLOCK_SIZE);
+					CHECK_ALLOCATED(client, "Command block")
+
+					FSInitCmdBlock(commandBlock);
+
+					// Open the file
+					int handle;
+					int status = FSOpenFile(client, commandBlock, file_path, "r", &handle, -1);
+
+					if (status == FS_STATUS_OK) {
+						// Send the OK status
+						((int *) buffer)[0] = status;
+						ret = sendwait(bss, clientfd, buffer, 4);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (OK status)")
+
+						// Retrieve the file statistics
+						FSStat stat;
+						ret = FSGetStatFile(client, commandBlock, handle, &stat, -1);
+						CHECK_FUNCTION_FAILED(ret, "FSGetStatFile")
+
+						// Send the total bytes count
+						int totalBytes = (int) stat.size;
+						((int *) buffer)[0] = totalBytes;
+						ret = sendwait(bss, clientfd, buffer, 4);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (total bytes)")
+
+						// Allocate the file bytes buffer
+						unsigned int file_buffer_size = 0x2000;
+						char *fileBuffer = (char *) OSAllocFromSystem(file_buffer_size, 0x40);
+						CHECK_ALLOCATED(fileBuffer, "File buffer")
+
+						int totalBytesRead = 0;
+						while (totalBytesRead < totalBytes) {
+							int bytesRead = FSReadFile(client, commandBlock, fileBuffer, 1, file_buffer_size, handle, 0,
+													   -1);
+							CHECK_FUNCTION_FAILED(bytesRead, "FSReadFile")
+
+							// Send file bytes
+							ret = sendwait(bss, clientfd, fileBuffer, bytesRead);
+							CHECK_FUNCTION_FAILED(ret, "sendwait (file buffer)")
+
+							totalBytesRead += bytesRead;
+						}
+
+						ret = FSCloseFile(client, commandBlock, handle, -1);
+						CHECK_FUNCTION_FAILED(ret, "FSCloseFile")
+
+						OSFreeToSystem(fileBuffer);
+					} else {
+						// Send the status
+						((int *) buffer)[0] = status;
+						ret = sendwait(bss, clientfd, buffer, 4);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (status)")
+					}
+
+					free(commandBlock);
+					ret = FSDelClient(client);
+					CHECK_FUNCTION_FAILED(ret, "FSDelClient");
+					free(client);
+					ret = FSShutdown();
+					CHECK_FUNCTION_FAILED(ret, "FSShutdown");
+				} else {
+					OSFatal("File path length exceeded");
+				}
+
+				break;
 			}
 			case 0x55: { /* cmd_code_handler_install_address */
 				((int *) buffer)[0] = CODE_HANDLER_INSTALL_ADDRESS;
 				ret = sendwait(bss, clientfd, buffer, 4);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
 
 				break;
+			}
+			case 0x56: { /* read_threads */
+				// TODO Read threads
+				/*else if (cmd == 5) { //Get thread list
+                //Might need OSDisableInterrupts here?
+                char buffer[0x1000]; //This should be enough
+                u32 offset = 0;
+
+                OSThread *currentThread = a->OSGetCurrentThread();
+                OSThread *iterThread = currentThread;
+                OSThreadLink threadLink;
+                do { //Loop previous threads
+                    offset += PushThread(buffer, offset, iterThread);
+                    a->OSGetActiveThreadLink(iterThread, &threadLink);
+                    iterThread = threadLink.prev;
+                } while (iterThread);
+
+                a->OSGetActiveThreadLink(currentThread, &threadLink);
+                iterThread = threadLink.next;
+                while (iterThread) { //Loop next threads
+                    offset += PushThread(buffer, offset, iterThread);
+                    a->OSGetActiveThreadLink(iterThread, &threadLink);
+                    iterThread = threadLink.next;
+                }
+
+                sendall(client, &offset, 4);
+                sendall(client, buffer, offset);
+            }*/
+
+				break;
+			}
+			case 0x57 : {
+				// TODO Get persistent ID
+				/*else if (cmd == 17) { //Get persistent id
+                a->nn_act_Initialize();
+                u8 slot = a->nn_act_GetSlotNo();
+                u32 persistentId = a->nn_act_GetPersistentIdEx(slot);
+                sendall(client, &persistentId, 4);
+                a->nn_act_Finalize();
+            }*/
+				break;
+			}
+			case 0x58: {
+				// TODO Write screen
+				/*void WriteScreen(const char *msg) {
+				globals *a = GLOBALS;
+				for (int buffer = 0; buffer < 2; buffer++) {
+					a->OSScreenClearBufferEx(buffer, 0);
+					a->OSScreenPutFontEx(buffer, 0, 0, msg);
+					a->OSScreenFlipBuffersEx(buffer);
+				}
+			}
+			*/
 			}
 			case 0x60: { /* cmd_follow_pointer */
 				ret = recvwait(bss, clientfd, buffer, 8);
 				CHECK_ERROR(ret < 0);
 
+				// Retrieve the pointer address and amount of offsets
 				int baseAddress = ((int *) buffer)[0];
 				int offsetsCount = ((int *) buffer)[1];
 
+				// Receive the offsets
 				ret = recvwait(bss, clientfd, buffer, offsetsCount * 4);
 				CHECK_ERROR(ret < 0);
 				int *offsets = (int *) buffer;
 
 				int destinationAddress = baseAddress;
 
+				// Apply pointer offsets
 				for (int offsetIndex = 0; offsetIndex < offsetsCount; offsetIndex++) {
 					int pointerValue = *(int *) destinationAddress;
 					int offset = offsets[offsetIndex];
 					destinationAddress = pointerValue + offset;
 
+					// Validate the pointer address
 					bool isValidDestinationAddress = OSIsAddressValid((const void *) destinationAddress)
 													 && destinationAddress >= 0x10000000
 													 && destinationAddress < 0x50000000;
 
+					// Bail out if invalid
 					if (!isValidDestinationAddress) {
 						destinationAddress = -1;
 
@@ -534,6 +762,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					}
 				}
 
+				// Return the destination address
 				((int *) buffer)[0] = destinationAddress;
 				ret = sendwait(bss, clientfd, buffer, 4);
 				CHECK_ERROR(ret < 0);
@@ -666,19 +895,63 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	return 0;
 }
 
-/*Validates the address range (last address inclusive) but is SLOW on bigger ranges */
-int validateAddressRange(int starting_address, int ending_address) {
-	// __OSValidateAddressSpaceRange(1, (void *) starting_address, ending_address - starting_address);
-	for (int current_address = starting_address; current_address <= ending_address; current_address++) {
-		int is_current_address_valid = OSIsAddressValid((void *) current_address);
+/*void dumpFile(const pygecko_bss_t *bss,
+			  int clientfd,
+			  int ret,
+			   unsigned char *buffer,
+			  char *file_path,
+			  void *client,
+			  void *commandBlock) {
+	// Open the file
+	int handle;
+	int status = FSOpenFile(client, commandBlock, file_path, "r", &handle, -1);
 
-		if (!is_current_address_valid) {
-			return 0;
-		}
-	}
+	if (status == FS_STATUS_OK) {
+						// Send the OK status
+						((int *) buffer)[0] = status;
+						ret = sendwait(bss, clientfd, buffer, 4);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (OK status)")
 
-	return 1;
-}
+						// Retrieve the file statistics
+						FSStat stat;
+						ret = FSGetStatFile(client, commandBlock, handle, &stat, -1);
+						CHECK_FUNCTION_FAILED(ret, "FSGetStatFile")
+
+						// Send the total bytes count
+						int totalBytes = (int) stat.size;
+						((int *) buffer)[0] = totalBytes;
+						ret = sendwait(bss, clientfd, buffer, 4);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (total bytes)")
+
+						// Allocate the file bytes buffer
+						unsigned int file_buffer_size = 0x2000;
+						char *fileBuffer = (char *) OSAllocFromSystem(file_buffer_size, 0x40);
+						CHECK_ALLOCATED(fileBuffer, "File buffer")
+
+						int totalBytesRead = 0;
+						while (totalBytesRead < totalBytes) {
+							int bytesRead = FSReadFile(client, commandBlock, fileBuffer, 1, file_buffer_size, handle, 0,
+													   -1);
+							CHECK_FUNCTION_FAILED(bytesRead, "FSReadFile")
+
+							// Send file bytes
+							ret = sendwait(bss, clientfd, fileBuffer, bytesRead);
+							CHECK_FUNCTION_FAILED(ret, "sendwait (file buffer)")
+
+							totalBytesRead += bytesRead;
+						}
+
+						ret = FSCloseFile(client, commandBlock, handle, -1);
+						CHECK_FUNCTION_FAILED(ret, "FSCloseFile")
+
+						OSFreeToSystem(fileBuffer);
+					} else {
+						// Send the status
+						((int *) buffer)[0] = status;
+						ret = sendwait(bss, clientfd, buffer, 4);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (status)")
+					}
+}*/
 
 static int start(int argc, void *argv) {
 	int sockfd = -1, clientfd = -1, ret = 0, len;
@@ -687,16 +960,25 @@ static int start(int argc, void *argv) {
 
 	socket_lib_init();
 
+	// TODO Initialize file system stuff here so it can be used easier later
+	/*a.FSInit();
+    a.SAVEInit();
+    a.FSInitCmdBlock(&a.fileBlock);
+    a.FSAddClient(&a.fileClient, -1);*/
+
 	while (1) {
 		addr.sin_family = AF_INET;
 		addr.sin_port = 7331;
 		addr.sin_addr.s_addr = 0;
+
 		sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-		CHECK_ERROR(sockfd == -1);
+		CHECK_ERROR(sockfd == -1)
+
 		ret = bind(sockfd, (void *) &addr, 16);
-		CHECK_ERROR(ret < 0);
+		CHECK_ERROR(ret < 0)
+
 		ret = listen(sockfd, 20);
-		CHECK_ERROR(ret < 0);
+		CHECK_ERROR(ret < 0)
 
 		while (1) {
 			len = 16;
