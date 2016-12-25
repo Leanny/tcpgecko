@@ -9,6 +9,9 @@
 #include "dynamic_libs/fs_functions.h"
 #include "common/fs_defs.h"
 
+void *client;
+void *commandBlock;
+
 struct pygecko_bss_t {
 	int error, line;
 	void *thread;
@@ -49,6 +52,7 @@ struct pygecko_bss_t {
         __os_snprintf(buffer, 50, "%s allocation failed", name); \
         OSFatal(buffer); \
     } \
+
 
 /*Validates the address range (last address inclusive) but is SLOW on bigger ranges */
 static int validateAddressRange(int starting_address, int ending_address) {
@@ -202,6 +206,14 @@ static int sendbyte(struct pygecko_bss_t *bss, int sock, unsigned char byte) {
 	return 0;
 }*/
 
+void writeScreen(const char *message) {
+	for (int bufferIndex = 0; bufferIndex < 2; bufferIndex++) {
+		OSScreenClearBufferEx(bufferIndex, 0);
+		OSScreenPutFontEx(bufferIndex, 0, 0, message);
+		OSScreenFlipBuffersEx(bufferIndex);
+	}
+}
+
 static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	int ret;
 
@@ -284,7 +296,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 					/* 	No exit condition.
 						We reconnect client-sided instead as a hacky work-around
-					 	to gain a little more performance by avoiding the very rare search canceling
+						 to gain a little more performance by avoiding the very rare search canceling
 					 */
 
 					/*ret = checkbyte(clientfd);
@@ -403,25 +415,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					strcpy(file_path, (char *) buffer);
 					// ASSERT_STRING(file_path, "/vol/content/afghanistan_gump_arena.ipak");
 
-					// Initialize the file system
-					ret = FSInit();
-					CHECK_FUNCTION_FAILED(ret, "FSInit")
-
-					// Allocate the client
-					void *client = malloc(FS_CLIENT_SIZE);
-					CHECK_ALLOCATED(client, "Client")
-
-					// Register the client
-					ret = FSAddClientEx(client, 0, -1);
-					CHECK_FUNCTION_FAILED(ret, "FSAddClientEx")
-
-					// Allocate the command block
-					void *commandBlock = malloc(FS_CMD_BLOCK_SIZE);
-					CHECK_ALLOCATED(client, "Command block")
-
-					FSInitCmdBlock(commandBlock);
-					// dumpFile(bss, clientfd, ret, buffer, file_path, client, commandBlock);
-
 					// Open the file
 					int handle;
 					int status = FSOpenFile(client, commandBlock, file_path, "r", &handle, -1);
@@ -450,7 +443,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 						int totalBytesRead = 0;
 						while (totalBytesRead < totalBytes) {
-							int bytesRead = FSReadFile(client, commandBlock, fileBuffer, 1, file_buffer_size, handle, 0,
+							int bytesRead = FSReadFile(client, commandBlock, fileBuffer, 1, file_buffer_size,
+													   handle, 0,
 													   -1);
 							CHECK_FUNCTION_FAILED(bytesRead, "FSReadFile")
 
@@ -471,13 +465,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 						ret = sendwait(bss, clientfd, buffer, 4);
 						CHECK_FUNCTION_FAILED(ret, "sendwait (error status)")
 					}
-
-					free(commandBlock);
-					ret = FSDelClient(client);
-					CHECK_FUNCTION_FAILED(ret, "FSDelClient");
-					free(client);
-					ret = FSShutdown();
-					CHECK_FUNCTION_FAILED(ret, "FSShutdown");
 				} else {
 					OSFatal("File path length exceeded");
 				}
@@ -498,24 +485,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					ret = recvwait(bss, clientfd, buffer, directory_path_length);
 					CHECK_FUNCTION_FAILED(ret, "recvwait (directory path)");
 					strcpy(directory_path, (char *) buffer);
-
-					// Initialize the file system
-					ret = FSInit();
-					CHECK_FUNCTION_FAILED(ret, "FSInit")
-
-					// Allocate the client
-					void *client = malloc(FS_CLIENT_SIZE);
-					CHECK_ALLOCATED(client, "Client")
-
-					// Register the client
-					ret = FSAddClientEx(client, 0, -1);
-					CHECK_FUNCTION_FAILED(ret, "FSAddClientEx")
-
-					// Allocate the command block
-					void *commandBlock = malloc(FS_CMD_BLOCK_SIZE);
-					CHECK_ALLOCATED(client, "Command block")
-
-					FSInitCmdBlock(commandBlock);
 
 					int handle;
 					FSDirEntry entry;
@@ -556,14 +525,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 						ret = sendwait(bss, clientfd, buffer, 4);
 						CHECK_FUNCTION_FAILED(ret, "sendwait (error status)")
 					}
-
-					// Clean up allocations
-					free(commandBlock);
-					ret = FSDelClient(client);
-					CHECK_FUNCTION_FAILED(ret, "FSDelClient");
-					free(client);
-					ret = FSShutdown();
-					CHECK_FUNCTION_FAILED(ret, "FSShutdown");
 				} else {
 					OSFatal("Directory path length exceeded");
 				}
@@ -571,7 +532,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x54: { /* cmd_replace_file */
-				// TODO
+				// TODO Not done
 				char file_path[FS_MAX_FULLPATH_SIZE] = {0};
 
 				// Receive the file path length
@@ -587,24 +548,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					CHECK_FUNCTION_FAILED(ret, "recvwait (file path)");
 					strcpy(file_path, (char *) buffer);
 					// ASSERT_STRING(file_path, "/vol/content/afghanistan_gump_arena.ipak");
-
-					// Initialize the file system
-					ret = FSInit();
-					CHECK_FUNCTION_FAILED(ret, "FSInit")
-
-					// Allocate the client
-					void *client = malloc(FS_CLIENT_SIZE);
-					CHECK_ALLOCATED(client, "Client")
-
-					// Register the client
-					ret = FSAddClientEx(client, 0, -1);
-					CHECK_FUNCTION_FAILED(ret, "FSAddClientEx")
-
-					// Allocate the command block
-					void *commandBlock = malloc(FS_CMD_BLOCK_SIZE);
-					CHECK_ALLOCATED(client, "Command block")
-
-					FSInitCmdBlock(commandBlock);
 
 					// Open the file
 					int handle;
@@ -634,7 +577,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 						int totalBytesRead = 0;
 						while (totalBytesRead < totalBytes) {
-							int bytesRead = FSReadFile(client, commandBlock, fileBuffer, 1, file_buffer_size, handle, 0,
+							int bytesRead = FSReadFile(client, commandBlock, fileBuffer, 1, file_buffer_size,
+													   handle, 0,
 													   -1);
 							CHECK_FUNCTION_FAILED(bytesRead, "FSReadFile")
 
@@ -655,13 +599,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 						ret = sendwait(bss, clientfd, buffer, 4);
 						CHECK_FUNCTION_FAILED(ret, "sendwait (status)")
 					}
-
-					free(commandBlock);
-					ret = FSDelClient(client);
-					CHECK_FUNCTION_FAILED(ret, "FSDelClient");
-					free(client);
-					ret = FSShutdown();
-					CHECK_FUNCTION_FAILED(ret, "FSShutdown");
 				} else {
 					OSFatal("File path length exceeded");
 				}
@@ -678,55 +615,46 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			case 0x56: { /* read_threads */
 				// TODO Read threads
 				/*else if (cmd == 5) { //Get thread list
-                //Might need OSDisableInterrupts here?
-                char buffer[0x1000]; //This should be enough
-                u32 offset = 0;
+				//Might need OSDisableInterrupts here?
+				char buffer[0x1000]; //This should be enough
+				u32 offset = 0;
 
-                OSThread *currentThread = a->OSGetCurrentThread();
-                OSThread *iterThread = currentThread;
-                OSThreadLink threadLink;
-                do { //Loop previous threads
-                    offset += PushThread(buffer, offset, iterThread);
-                    a->OSGetActiveThreadLink(iterThread, &threadLink);
-                    iterThread = threadLink.prev;
-                } while (iterThread);
+				OSThread *currentThread = a->OSGetCurrentThread();
+				OSThread *iterThread = currentThread;
+				OSThreadLink threadLink;
+				do { //Loop previous threads
+					offset += PushThread(buffer, offset, iterThread);
+					a->OSGetActiveThreadLink(iterThread, &threadLink);
+					iterThread = threadLink.prev;
+				} while (iterThread);
 
-                a->OSGetActiveThreadLink(currentThread, &threadLink);
-                iterThread = threadLink.next;
-                while (iterThread) { //Loop next threads
-                    offset += PushThread(buffer, offset, iterThread);
-                    a->OSGetActiveThreadLink(iterThread, &threadLink);
-                    iterThread = threadLink.next;
-                }
+				a->OSGetActiveThreadLink(currentThread, &threadLink);
+				iterThread = threadLink.next;
+				while (iterThread) { //Loop next threads
+					offset += PushThread(buffer, offset, iterThread);
+					a->OSGetActiveThreadLink(iterThread, &threadLink);
+					iterThread = threadLink.next;
+				}
 
-                sendall(client, &offset, 4);
-                sendall(client, buffer, offset);
-            }*/
+				sendall(client, &offset, 4);
+				sendall(client, buffer, offset);
+			}*/
 
 				break;
 			}
 			case 0x57 : {
 				// TODO Get persistent ID
 				/*else if (cmd == 17) { //Get persistent id
-                a->nn_act_Initialize();
-                u8 slot = a->nn_act_GetSlotNo();
-                u32 persistentId = a->nn_act_GetPersistentIdEx(slot);
-                sendall(client, &persistentId, 4);
-                a->nn_act_Finalize();
-            }*/
+				a->nn_act_Initialize();
+				u8 slot = a->nn_act_GetSlotNo();
+				u32 persistentId = a->nn_act_GetPersistentIdEx(slot);
+				sendall(client, &persistentId, 4);
+				a->nn_act_Finalize();
+			}*/
 				break;
 			}
 			case 0x58: {
 				// TODO Write screen
-				/*void WriteScreen(const char *msg) {
-				globals *a = GLOBALS;
-				for (int buffer = 0; buffer < 2; buffer++) {
-					a->OSScreenClearBufferEx(buffer, 0);
-					a->OSScreenPutFontEx(buffer, 0, 0, msg);
-					a->OSScreenFlipBuffersEx(buffer);
-				}
-			}
-			*/
 			}
 			case 0x60: { /* cmd_follow_pointer */
 				ret = recvwait(bss, clientfd, buffer, 8);
@@ -961,10 +889,23 @@ static int start(int argc, void *argv) {
 	socket_lib_init();
 
 	// TODO Initialize file system stuff here so it can be used easier later
-	/*a.FSInit();
-    a.SAVEInit();
-    a.FSInitCmdBlock(&a.fileBlock);
-    a.FSAddClient(&a.fileClient, -1);*/
+	// Initialize the file system
+	ret = FSInit();
+	CHECK_FUNCTION_FAILED(ret, "FSInit")
+
+	// Allocate the client
+	client = malloc(FS_CLIENT_SIZE);
+	CHECK_ALLOCATED(client, "Client")
+
+	// Register the client
+	ret = FSAddClientEx(client, 0, -1);
+	CHECK_FUNCTION_FAILED(ret, "FSAddClientEx")
+
+	// Allocate the command block
+	commandBlock = malloc(FS_CMD_BLOCK_SIZE);
+	CHECK_ALLOCATED(client, "Command block")
+
+	FSInitCmdBlock(commandBlock);
 
 	while (1) {
 		addr.sin_family = AF_INET;
@@ -1053,7 +994,8 @@ void start_pygecko(void) {
 	// Create the thread
 	void *thread = memalign(0x40, 0x1000);
 
-	if (OSCreateThread(thread, CCThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0, 2 | 0x10 | 8) == 1) {
+	if (OSCreateThread(thread, CCThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0, 2 | 0x10 | 8) ==
+		1) {
 		OSResumeThread(thread);
 	} else {
 		free(thread);
