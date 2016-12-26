@@ -91,6 +91,8 @@ extern int
 (*OSCreateThread)(void *thread, s32 (*callback)(s32, void *), s32 argc, void *args, u32 stack, u32 stack_size,
 				  s32 priority, u32 attr);
 
+extern int (*OSGetCurrentThread) (void);
+
 extern int (*OSResumeThread)(void *thread);
 
 extern int (*OSSleepThread)(void *thread);

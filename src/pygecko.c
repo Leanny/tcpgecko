@@ -9,8 +9,14 @@
 #include "dynamic_libs/fs_functions.h"
 #include "common/fs_defs.h"
 
+/*	TODO Fix memory shifting here by allocating the variables "properly" as well
+	http://gbatemp.net/threads/avoiding-memory-addresses-shifts.454433
+*/
 void *client;
 void *commandBlock;
+
+// static void* client __attribute__ ((section (".data")));
+// static void* commandBlock __attribute__ ((section (".data")));
 
 struct pygecko_bss_t {
 	int error, line;
@@ -581,7 +587,43 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x56: { /* read_threads */
-				// TODO Read threads
+				// TODO Read threads (not working yet apparently stuck before reading the first size)
+				int OS_THREAD_SIZE = 0x6A0;
+				int threadAddress = *(int *) 0xFFFFFFE0;
+
+				int temporaryThreadAddress;
+
+				while ((temporaryThreadAddress = *(int *) (threadAddress + 0x390)) != 0) {
+					threadAddress = temporaryThreadAddress;
+				}
+
+				while ((temporaryThreadAddress = *(int *) (threadAddress + 0x38C)) != 0) {
+					// Send the OSThread struct size
+					((int *) buffer)[0] = OS_THREAD_SIZE;
+					ret = sendwait(bss, clientfd, buffer, 4);
+
+					// Send the OSThread struct
+					memcpy(buffer, (void *) threadAddress, OS_THREAD_SIZE);
+					ret = sendwait(bss, clientfd, buffer, OS_THREAD_SIZE);
+					CHECK_ERROR(ret < 0)
+
+					threadAddress = temporaryThreadAddress;
+				}
+
+				// Send the OSThread struct size
+				((int *) buffer)[0] = OS_THREAD_SIZE;
+				ret = sendwait(bss, clientfd, buffer, 4);
+
+				// Send the OSThread struct
+				memcpy(buffer, (void *) threadAddress, OS_THREAD_SIZE);
+				ret = sendwait(bss, clientfd, buffer, OS_THREAD_SIZE);
+				CHECK_ERROR(ret < 0)
+
+				// Let the client know that no more threads are coming
+				((int *) buffer)[0] = 0;
+				ret = sendwait(bss, clientfd, buffer, 4);
+
+				// OSThread *thread = (OSThread *) OSGetCurrentThread();
 				/*else if (cmd == 5) { //Get thread list
 				//Might need OSDisableInterrupts here?
 				char buffer[0x1000]; //This should be enough
@@ -791,8 +833,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	return 0;
 }
 
-void initializeFileSystem()
-{
+void initializeFileSystem() {
 	// Initialize the file system
 	int status = FSInit();
 	CHECK_FUNCTION_FAILED(status, "FSInit")

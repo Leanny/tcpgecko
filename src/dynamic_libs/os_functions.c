@@ -51,6 +51,8 @@ EXPORT_DECL(int, OSCreateThread, void *thread, s32(*callback)(s32, void * ), s32
 					priority, u32
 					attr);
 
+EXPORT_DECL(int, OSGetCurrentThread, void);
+
 EXPORT_DECL(int, OSResumeThread, void *thread);
 
 EXPORT_DECL(int, OSSleepThread, void *thread);
@@ -248,6 +250,7 @@ void InitOSFunctionPointers(void) {
 	//!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 	//! Thread functions
 	//!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	OS_FIND_EXPORT(coreinit_handle, OSGetCurrentThread);
 	OS_FIND_EXPORT(coreinit_handle, OSCreateThread);
 	OS_FIND_EXPORT(coreinit_handle, OSResumeThread);
 	OS_FIND_EXPORT(coreinit_handle, OSSleepThread);
