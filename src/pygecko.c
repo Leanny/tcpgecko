@@ -8,15 +8,19 @@
 #include "kernel/syscalls.h"
 #include "dynamic_libs/fs_functions.h"
 #include "common/fs_defs.h"
+#include "system/exception_handler.h"
 
-/*	TODO Fix memory shifting here by allocating the variables "properly" as well
+/*	TODO Fix memory shifting here by allocating the variables in the .data section of the ELF
 	http://gbatemp.net/threads/avoiding-memory-addresses-shifts.454433
 */
+/*char client_r[FS_CLIENT_SIZE] __attribute__ ((section (".data")));
+void *client = (void *) client_r;
+
+char commandBlock_r[FS_CMD_BLOCK_SIZE] __attribute__ ((section (".data")));
+void *commandBlock = (void *) commandBlock_r;*/
+
 void *client;
 void *commandBlock;
-
-// static void* client __attribute__ ((section (".data")));
-// static void* commandBlock __attribute__ ((section (".data")));
 
 struct pygecko_bss_t {
 	int error, line;
@@ -33,10 +37,17 @@ struct pygecko_bss_t {
 
 #define CHECK_FUNCTION_FAILED(returnValue, functionName) \
     if (returnValue < 0) { \
-        char buffer[50] = {0}; \
-        __os_snprintf(buffer, 50, "%s failed with return value: %i", functionName, returnValue); \
+        char buffer[100] = {0}; \
+        __os_snprintf(buffer, 100, "%s failed with return value: %i", functionName, returnValue); \
         OSFatal(buffer); \
-    }
+    } \
+
+#define ASSERT_VALID_ADDRESS(address, message) \
+    if(!OSIsAddressValid((void *) address)) { \
+    char buffer[100] = {0}; \
+        __os_snprintf(buffer, 100, "Address %04x invalid: %s", address, message); \
+        OSFatal(buffer); \
+    } \
 
 #define ASSERT_INTEGER(actual, expected, name) \
     if(actual != expected) { \
@@ -62,22 +73,12 @@ struct pygecko_bss_t {
 
 /*Validates the address range (last address inclusive) but is SLOW on bigger ranges */
 static int validateAddressRange(int starting_address, int ending_address) {
-	// __OSValidateAddressSpaceRange(1, (void *) starting_address, ending_address - starting_address);
-	for (int current_address = starting_address; current_address <= ending_address; current_address++) {
-		int is_current_address_valid = OSIsAddressValid((void *) current_address);
-
-		if (!is_current_address_valid) {
-			return 0;
-		}
-	}
-
-	return 1;
+	return __OSValidateAddressSpaceRange(1, (void *) starting_address, ending_address - starting_address + 1);
 }
 
 unsigned char *memcpy_buffer[DATA_BUFFER_SIZE];
 
 void pygecko_memcpy(unsigned char *destinationBuffer, unsigned char *sourceBuffer, unsigned int length) {
-
 	memcpy(memcpy_buffer, sourceBuffer, length);
 	SC0x25_KernelCopyData((unsigned int) OSEffectiveToPhysical(destinationBuffer), (unsigned int) &memcpy_buffer,
 						  length);
@@ -321,10 +322,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 						 to gain a little more performance by avoiding the very rare search canceling
 					 */
 
-					/*ret = checkbyte(clientfd);
-					if (ret == 0xcc)
-						goto next_cmd;*/
-
 					startingAddress += length;
 				}
 				break;
@@ -346,10 +343,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x06: { /* cmd_validate_address_range */
-				// TODO Too slow on big ranges...
-
 				ret = recvwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
 
 				// Retrieve the data
 				int starting_address = ((int *) buffer)[0];
@@ -587,68 +582,44 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x56: { /* read_threads */
-				// TODO Read threads (not working yet apparently stuck before reading the first size)
 				int OS_THREAD_SIZE = 0x6A0;
-				int threadAddress = *(int *) 0xFFFFFFE0;
 
+				int currentThreadAddress = OSGetCurrentThread();
+				ASSERT_VALID_ADDRESS(currentThreadAddress, "OSGetCurrentThread")
+				int iterationThreadAddress = currentThreadAddress;
 				int temporaryThreadAddress;
 
-				while ((temporaryThreadAddress = *(int *) (threadAddress + 0x390)) != 0) {
-					threadAddress = temporaryThreadAddress;
+				// Follow "previous thread" pointers back to the beginning
+				while ((temporaryThreadAddress = *(int *) (iterationThreadAddress + 0x390)) != 0)
+				{
+					iterationThreadAddress = temporaryThreadAddress;
+					ASSERT_VALID_ADDRESS(iterationThreadAddress, "iterationThreadAddress going backwards")
 				}
 
-				while ((temporaryThreadAddress = *(int *) (threadAddress + 0x38C)) != 0) {
-					// Send the OSThread struct size
-					((int *) buffer)[0] = OS_THREAD_SIZE;
-					ret = sendwait(bss, clientfd, buffer, 4);
+				// Send all threads by following the "next thread" pointers
+				while ((temporaryThreadAddress = *(int *) (iterationThreadAddress + 0x38C)) != 0) {
+					// Send the starting thread's address
+					((int *) buffer)[0] = iterationThreadAddress;
 
-					// Send the OSThread struct
-					memcpy(buffer, (void *) threadAddress, OS_THREAD_SIZE);
-					ret = sendwait(bss, clientfd, buffer, OS_THREAD_SIZE);
+					// Send the thread struct itself
+					memcpy(buffer + 4, (void *) iterationThreadAddress, OS_THREAD_SIZE);
+					ret = sendwait(bss, clientfd, buffer, 4 + OS_THREAD_SIZE);
 					CHECK_ERROR(ret < 0)
 
-					threadAddress = temporaryThreadAddress;
+					iterationThreadAddress = temporaryThreadAddress;
+					ASSERT_VALID_ADDRESS(iterationThreadAddress, "iterationThreadAddress going forwards")
 				}
 
-				// Send the OSThread struct size
-				((int *) buffer)[0] = OS_THREAD_SIZE;
-				ret = sendwait(bss, clientfd, buffer, 4);
-
-				// Send the OSThread struct
-				memcpy(buffer, (void *) threadAddress, OS_THREAD_SIZE);
-				ret = sendwait(bss, clientfd, buffer, OS_THREAD_SIZE);
+				// The previous while would skip the last thread so send it also
+				((int *) buffer)[0] = iterationThreadAddress;
+				memcpy(buffer + 4, (void *) iterationThreadAddress, OS_THREAD_SIZE);
+				ret = sendwait(bss, clientfd, buffer, 4 + OS_THREAD_SIZE);
 				CHECK_ERROR(ret < 0)
 
 				// Let the client know that no more threads are coming
 				((int *) buffer)[0] = 0;
 				ret = sendwait(bss, clientfd, buffer, 4);
-
-				// OSThread *thread = (OSThread *) OSGetCurrentThread();
-				/*else if (cmd == 5) { //Get thread list
-				//Might need OSDisableInterrupts here?
-				char buffer[0x1000]; //This should be enough
-				u32 offset = 0;
-
-				OSThread *currentThread = a->OSGetCurrentThread();
-				OSThread *iterThread = currentThread;
-				OSThreadLink threadLink;
-				do { //Loop previous threads
-					offset += PushThread(buffer, offset, iterThread);
-					a->OSGetActiveThreadLink(iterThread, &threadLink);
-					iterThread = threadLink.prev;
-				} while (iterThread);
-
-				a->OSGetActiveThreadLink(currentThread, &threadLink);
-				iterThread = threadLink.next;
-				while (iterThread) { //Loop next threads
-					offset += PushThread(buffer, offset, iterThread);
-					a->OSGetActiveThreadLink(iterThread, &threadLink);
-					iterThread = threadLink.next;
-				}
-
-				sendall(client, &offset, 4);
-				sendall(client, buffer, offset);
-			}*/
+				CHECK_ERROR(ret < 0)
 
 				break;
 			}
@@ -848,7 +819,7 @@ void initializeFileSystem() {
 
 	// Allocate the command block
 	commandBlock = malloc(FS_CMD_BLOCK_SIZE);
-	CHECK_ALLOCATED(client, "Command block")
+	CHECK_ALLOCATED(commandBlock, "Command block")
 
 	FSInitCmdBlock(commandBlock);
 }
@@ -858,6 +829,7 @@ static int start(int argc, void *argv) {
 	struct sockaddr_in addr;
 	struct pygecko_bss_t *bss = argv;
 
+	setup_os_exceptions();
 	socket_lib_init();
 	initializeFileSystem();
 
