@@ -11,6 +11,7 @@
 #include "system/exception_handler.h"
 
 /*	TODO Fix memory shifting here by allocating the variables in the .data section of the ELF
+ 	Allocate later?
 	http://gbatemp.net/threads/avoiding-memory-addresses-shifts.454433
 */
 /*char client_r[FS_CLIENT_SIZE] __attribute__ ((section (".data")));
@@ -237,6 +238,28 @@ void receiveString(struct pygecko_bss_t *bss, int clientfd, char *stringBuffer, 
 	}
 }
 
+void considerInitializingFileSystem() {
+	if (!client) {
+		// Initialize the file system
+		int status = FSInit();
+		CHECK_FUNCTION_FAILED(status, "FSInit")
+
+		// Allocate the client
+		client = malloc(FS_CLIENT_SIZE);
+		CHECK_ALLOCATED(client, "Client")
+
+		// Register the client
+		status = FSAddClientEx(client, 0, -1);
+		CHECK_FUNCTION_FAILED(status, "FSAddClientEx")
+
+		// Allocate the command block
+		commandBlock = malloc(FS_CMD_BLOCK_SIZE);
+		CHECK_ALLOCATED(commandBlock, "Command block")
+
+		FSInitCmdBlock(commandBlock);
+	}
+}
+
 static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	int ret;
 
@@ -419,6 +442,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				char file_path[FS_MAX_FULLPATH_SIZE] = {0};
 				receiveString(bss, clientfd, file_path, FS_MAX_FULLPATH_SIZE);
 
+				considerInitializingFileSystem();
+
 				int handle;
 				int status = FSOpenFile(client, commandBlock, file_path, "r", &handle, -1);
 
@@ -474,6 +499,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			case 0x53: { /* cmd_read_directory */
 				char directory_path[FS_MAX_FULLPATH_SIZE] = {0};
 				receiveString(bss, clientfd, directory_path, FS_MAX_FULLPATH_SIZE);
+
+				considerInitializingFileSystem();
 
 				int handle;
 				FSDirEntry entry;
@@ -590,8 +617,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				int temporaryThreadAddress;
 
 				// Follow "previous thread" pointers back to the beginning
-				while ((temporaryThreadAddress = *(int *) (iterationThreadAddress + 0x390)) != 0)
-				{
+				while ((temporaryThreadAddress = *(int *) (iterationThreadAddress + 0x390)) != 0) {
 					iterationThreadAddress = temporaryThreadAddress;
 					ASSERT_VALID_ADDRESS(iterationThreadAddress, "iterationThreadAddress going backwards")
 				}
@@ -804,26 +830,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	return 0;
 }
 
-void initializeFileSystem() {
-	// Initialize the file system
-	int status = FSInit();
-	CHECK_FUNCTION_FAILED(status, "FSInit")
-
-	// Allocate the client
-	client = malloc(FS_CLIENT_SIZE);
-	CHECK_ALLOCATED(client, "Client")
-
-	// Register the client
-	status = FSAddClientEx(client, 0, -1);
-	CHECK_FUNCTION_FAILED(status, "FSAddClientEx")
-
-	// Allocate the command block
-	commandBlock = malloc(FS_CMD_BLOCK_SIZE);
-	CHECK_ALLOCATED(commandBlock, "Command block")
-
-	FSInitCmdBlock(commandBlock);
-}
-
 static int start(int argc, void *argv) {
 	int sockfd = -1, clientfd = -1, ret = 0, len;
 	struct sockaddr_in addr;
@@ -831,7 +837,7 @@ static int start(int argc, void *argv) {
 
 	setup_os_exceptions();
 	socket_lib_init();
-	initializeFileSystem();
+	// considerInitializingFileSystem();
 
 	while (1) {
 		addr.sin_family = AF_INET;
