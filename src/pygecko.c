@@ -10,16 +10,6 @@
 #include "common/fs_defs.h"
 #include "system/exception_handler.h"
 
-/*	TODO Fix memory shifting here by allocating the variables in the .data section of the ELF
- 	Allocate later?
-	http://gbatemp.net/threads/avoiding-memory-addresses-shifts.454433
-*/
-/*char client_r[FS_CLIENT_SIZE] __attribute__ ((section (".data")));
-void *client = (void *) client_r;
-
-char commandBlock_r[FS_CMD_BLOCK_SIZE] __attribute__ ((section (".data")));
-void *commandBlock = (void *) commandBlock_r;*/
-
 void *client;
 void *commandBlock;
 
@@ -140,79 +130,6 @@ static int sendbyte(struct pygecko_bss_t *bss, int sock, unsigned char byte) {
 	buffer[0] = byte;
 	return sendwait(bss, sock, buffer, 1);
 }
-
-/*static void DumpFile(void *client, void *commandBlock, SendData *sendData, char *path, unsigned int fileSize) {
-	sendData->tag = 0x02;
-	memcpy(&sendData->data[0], &fileSize, 4);
-	sendData->length = snprintf((char *) sendData->data + 4, FS_BUFFER_SIZE - 4, "%s", path) + 4 + 1;
-	// sendwait(iClientSocket, sendData, sizeof(SendData) + sendData->length);
-
-	int ret = 0; // recvwait(iClientSocket, (char*)sendData, sizeof(SendData) + 1);
-	if (ret < (int) (sizeof(SendData) + 1) || (sendData->data[0] != 1)) {
-		return;
-	}
-
-	unsigned char *dataBuffer = (unsigned char *) memalign(0x40, FS_BUFFER_SIZE);
-	if (!dataBuffer) {
-		return;
-	}
-
-	int fileDescriptor = 0;
-	if (FSOpenFile(client, commandBlock, path, "r", &fileDescriptor, -1) != FS_STATUS_OK) {
-		free(dataBuffer);
-		sendData->tag = 0x04;
-		sendData->length = 0;
-		// sendwait(iClientSocket, sendData, sizeof(SendData) + sendData->length);
-		return;
-	}
-
-	// Copy rpl in memory
-	while ((ret = FSReadFile(client, commandBlock, dataBuffer, 0x1, FS_BUFFER_SIZE, fileDescriptor, 0, -1)) > 0) {
-		sendData->tag = 0x03;
-		sendData->length = ret;
-		memcpy(sendData->data, dataBuffer, sendData->length);
-
-		// if(sendwait(iClientSocket, sendData, sizeof(SendData) + sendData->length) < 0) {
-		//	break;
-		// }
-	}
-
-	sendData->tag = 0x04;
-	sendData->length = 0;
-	// sendwait(iClientSocket, sendData, sizeof(SendData) + sendData->length);
-
-	FSCloseFile(client, commandBlock, fileDescriptor, -1);
-	free(dataBuffer);
-}*/
-
-/*static int sendDirectoryData(void *client, void *commandBlock, SendData *sendData, char *path) {
-	int dataHandle = 0;
-
-	sendData->tag = 0x01;
-	sendData->length = snprintf((char *) sendData->data, FS_BUFFER_SIZE, "%s", path) + 1;
-	// sendwait(iClientSocket, sendData, sizeof(SendData) + sendData->length);
-
-	if (FSOpenDir(client, commandBlock, path, &dataHandle, -1) != 0) {
-		return -1;
-	}
-
-	FSDirEntry *dirEntry = (FSDirEntry *) malloc(sizeof(FSDirEntry));
-
-	while (FSReadDir(client, commandBlock, dataHandle, dirEntry, -1) == 0) {
-		int pathLength = strlen(path);
-		snprintf(path + pathLength, FS_MAX_FULLPATH_SIZE - pathLength, "/%s", dirEntry->name);
-
-		if (dirEntry->stat.flag & 0x80000000) {
-			sendDirectoryData(client, commandBlock, sendData, path);
-		} else {
-			// DumpFile(client, commandBlock, sendData, path, dirEntry->stat.size);
-		}
-		path[pathLength] = 0;
-	}
-	free(dirEntry);
-	FSCloseDir(client, commandBlock, dataHandle, -1);
-	return 0;
-}*/
 
 void writeScreen(const char *message) {
 	for (unsigned int bufferIndex = 0; bufferIndex < 2; bufferIndex++) {
@@ -837,7 +754,6 @@ static int start(int argc, void *argv) {
 
 	setup_os_exceptions();
 	socket_lib_init();
-	// considerInitializingFileSystem();
 
 	while (1) {
 		addr.sin_family = AF_INET;
