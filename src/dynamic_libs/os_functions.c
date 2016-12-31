@@ -142,6 +142,10 @@ EXPORT_DECL(int, OSAllocFromSystem, unsigned int size, unsigned int align);
 
 EXPORT_DECL(int, OSFreeToSystem, void* ptr);
 
+EXPORT_DECL(void, DisassemblePPCRange, void *, void *, DisasmReport, DisasmGetSym, u32);
+
+EXPORT_DECL(void*, OSGetSymbolName, u32, u8*, u32);
+
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! Memory functions
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -236,6 +240,8 @@ void InitOSFunctionPointers(void) {
 	OS_FIND_EXPORT(coreinit_handle, __gh_errno_ptr);
 	OS_FIND_EXPORT(coreinit_handle, OSAllocFromSystem);
 	OS_FIND_EXPORT(coreinit_handle, OSFreeToSystem);
+	OS_FIND_EXPORT(coreinit_handle, DisassemblePPCRange);
+	OS_FIND_EXPORT(coreinit_handle, OSGetSymbolName);
 
 	OSDynLoad_FindExport(coreinit_handle, 0, "_Exit", &__Exit);
 

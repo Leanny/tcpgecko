@@ -31,6 +31,17 @@
 extern "C" {
 #endif
 
+typedef void (*DisasmReport)(char *outputBuffer, ...);
+
+typedef void *(*DisasmGetSym)(u32 addr, u8 *symbolName, u32 nameBufSize);
+
+#define PPC_DISASM_DEFAULT     0x00000000  // use defaults
+#define PPC_DISASM_SIMPLIFY    0x00000001  // use simplified mnemonics
+#define PPC_DISASM_REG_SPACES  0x00000020  // emit spaces between registers
+#define PPC_DISASM_EMIT_DISASM 0x00000040  // emit only disassembly
+#define PPC_DISASM_EMIT_ADDR   0x00000080  // emit only addresses + disassembly
+#define PPC_DISASM_EMIT_FUNCS  0x00000100  // emit function names before and during disassembly
+
 #define BUS_SPEED                       248625000
 #define SECS_TO_TICKS(sec)              (((unsigned long long)(sec)) * (BUS_SPEED/4))
 #define MILLISECS_TO_TICKS(msec)        (SECS_TO_TICKS(msec) / 1000)
@@ -91,7 +102,7 @@ extern int
 (*OSCreateThread)(void *thread, s32 (*callback)(s32, void *), s32 argc, void *args, u32 stack, u32 stack_size,
 				  s32 priority, u32 attr);
 
-extern int (*OSGetCurrentThread) (void);
+extern int (*OSGetCurrentThread)(void);
 
 extern int (*OSResumeThread)(void *thread);
 
@@ -147,7 +158,7 @@ extern int (*OSIsAddressValid)(const void *);
 
 extern int (*__OSValidateAddressSpaceRange)(int dummyTrue, void *address, int size);
 
-extern int (*__os_snprintf)(char *s, int n, const char *format, ...);
+extern int (*__os_snprintf)(char *buffer, int length, const char *format, ...);
 
 extern int *(*__gh_errno_ptr)(void);
 
@@ -172,6 +183,12 @@ extern void (*OSSetExceptionCallback)(u8 exceptionType, exception_callback newCa
 extern int (*OSAllocFromSystem)(unsigned int size, unsigned int align);
 
 extern int (*OSFreeToSystem)(void *aPtr);
+
+extern void
+(*DisassemblePPCRange)(void *rangeStart, void *rangeEnd, DisasmReport disasmReport, DisasmGetSym disasmGetSym,
+					   u32 disasmOptions);
+
+extern void *(*OSGetSymbolName)(u32 addr, u8 *symbolName, u32 nameBufSize);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! MCP functions
