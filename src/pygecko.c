@@ -26,6 +26,7 @@ struct pygecko_bss_t {
 #define EWOULDBLOCK 6
 #define FS_BUFFER_SIZE 0x1000
 #define DATA_BUFFER_SIZE 0x5000
+#define DISASSEMBLER_BUFFER_SIZE 0x200
 
 #define ASSERT_VALID_BUFFER_SIZE(maximum, actual, message) \
 if(actual > maximum) { \
@@ -186,9 +187,8 @@ void considerInitializingFileSystem() {
 }
 
 void formatDisassembled(char *format, ...) {
-	int length = 200;
-	disassemblerBuffer = malloc(length);
-	__os_snprintf((char *) disassemblerBuffer, length, format);
+	disassemblerBuffer = malloc(DISASSEMBLER_BUFFER_SIZE);
+	__os_snprintf((char *) disassemblerBuffer, DISASSEMBLER_BUFFER_SIZE, format);
 }
 
 static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
@@ -309,7 +309,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				sendbyte(bss, clientfd, (unsigned char) is_address_range_valid);
 				break;
 			}
-			case 0x07: { /* cmd_memory_disassemble */
+			case 0x07: { /* cmd_disassemble_range */
+				// TODO Not working correctly
 				// Receive the starting, ending address and the disassembler options
 				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
 				CHECK_ERROR(ret < 0)
@@ -321,14 +322,61 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				DisassemblePPCRange(startingAddress, endingAddress, formatDisassembled, OSGetSymbolName,
 									(u32) disassemblerOptions);
 
-				// Send the disassembler buffer length
-				int length = strlen(disassemblerBuffer);
+				// Send the disassembler buffer size
+				int length = DISASSEMBLER_BUFFER_SIZE;
 				ret = sendwait(bss, clientfd, &length, 4);
 				CHECK_FUNCTION_FAILED(ret, "sendwait (disassembler buffer size)")
 
-				// Send the disassembled data
+				// Send the data
 				ret = sendwait(bss, clientfd, disassemblerBuffer, length);
 				CHECK_FUNCTION_FAILED(ret, "sendwait (disassembler buffer)")
+
+				free(disassemblerBuffer);
+
+				break;
+			}
+			case 0x08: { /* cmd_memory_disassemble */
+				// Receive the starting address and disassembler options
+				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
+				CHECK_ERROR(ret < 0)
+				int startingAddress = ((int *) buffer)[0];
+				int endingAddress = ((int *) buffer)[1];
+				int disassemblerOptions = ((int *) buffer)[2];
+
+				int currentAddress = startingAddress;
+
+				// Disassemble and send each instruction
+				while (currentAddress < endingAddress) {
+					ret = sendwait(bss, clientfd, &currentAddress, 4);
+					CHECK_FUNCTION_FAILED(ret, "sendwait (disassembled address)")
+
+					int value = *(int *) currentAddress;
+					ret = sendwait(bss, clientfd, &value, 4);
+					CHECK_FUNCTION_FAILED(ret, "sendwait (disassembled value)")
+
+					int bufferSize = PPC_DISASM_MAX_BUFFER;
+					char *opCodeBuffer = malloc(bufferSize);
+
+					bool status = DisassemblePPCOpcode((u32 *) currentAddress, opCodeBuffer, (u32) bufferSize, OSGetSymbolName,
+													   (u32) disassemblerOptions);
+
+					ret = sendbyte(bss, clientfd, (unsigned char) status);
+					CHECK_FUNCTION_FAILED(ret, ("sendwait (disassembler status)"))
+
+					if (status) {
+						// Send the disassembler buffer size constant
+						ret = sendwait(bss, clientfd, &bufferSize, 4);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (disassembler buffer size)")
+
+						// Send the disassembled buffer itself
+						ret = sendwait(bss, clientfd, opCodeBuffer, bufferSize);
+						CHECK_FUNCTION_FAILED(ret, "sendwait (disassembler buffer)")
+					}
+
+					free(opCodeBuffer);
+
+					currentAddress += 4;
+				}
 
 				break;
 			}
@@ -631,6 +679,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			}
 			case 0x58: {
 				// TODO Write screen
+
+				break;
 			}
 			case 0x60: { /* cmd_follow_pointer */
 				ret = recvwait(bss, clientfd, buffer, 8);
@@ -695,7 +745,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				((long long *) buffer)[0] = result;
 				ret = sendwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
+
 				break;
 			}
 			case 0x71: { /* cmd_getsymbol */
@@ -718,7 +769,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				((int *) buffer)[0] = (int) function_address;
 				ret = sendwait(bss, clientfd, buffer, 4);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
+
 				break;
 			}
 			case 0x72: { /* cmd_search32 */
@@ -737,7 +789,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				}
 				((int *) buffer)[0] = resaddr;
 				ret = sendwait(bss, clientfd, buffer, 4);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
+
 				break;
 			}
 			case 0x80: { /* cmd_rpc_big */
@@ -770,7 +823,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				((long long *) buffer)[0] = result;
 				ret = sendwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
+
 				break;
 			}
 			case 0x99: { /* cmd_version */
@@ -781,7 +835,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			case 0x9A: { /* cmd_os_version */
 				((int *) buffer)[0] = (int) OS_FIRMWARE;
 				ret = sendwait(bss, clientfd, buffer, 4);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
+
 				break;
 			}
 			case 0xcc: { /* GCFAIL */
@@ -789,7 +844,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			}
 			default:
 				ret = -1;
-				CHECK_ERROR(0);
+				CHECK_ERROR(0)
+
 				break;
 		}
 	}

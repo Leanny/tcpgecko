@@ -35,6 +35,8 @@ typedef void (*DisasmReport)(char *outputBuffer, ...);
 
 typedef void *(*DisasmGetSym)(u32 addr, u8 *symbolName, u32 nameBufSize);
 
+#define PPC_DISASM_MAX_BUFFER 64
+
 #define PPC_DISASM_DEFAULT     0x00000000  // use defaults
 #define PPC_DISASM_SIMPLIFY    0x00000001  // use simplified mnemonics
 #define PPC_DISASM_REG_SPACES  0x00000020  // emit spaces between registers
@@ -184,9 +186,9 @@ extern int (*OSAllocFromSystem)(unsigned int size, unsigned int align);
 
 extern int (*OSFreeToSystem)(void *aPtr);
 
-extern void
-(*DisassemblePPCRange)(void *rangeStart, void *rangeEnd, DisasmReport disasmReport, DisasmGetSym disasmGetSym,
-					   u32 disasmOptions);
+extern void (*DisassemblePPCRange)(void *rangeStart, void *rangeEnd, DisasmReport disasmReport, DisasmGetSym disasmGetSym, u32 disasmOptions);
+
+extern bool (*DisassemblePPCOpcode)(u32 *opcode, char *outputBuffer, u32 bufferSize, DisasmGetSym disasmGetSym, u32 disasmOptions);
 
 extern void *(*OSGetSymbolName)(u32 addr, u8 *symbolName, u32 nameBufSize);
 
