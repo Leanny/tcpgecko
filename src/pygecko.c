@@ -1,7 +1,10 @@
-#include <string.h>
+#include <stdarg.h>
+#include <stdlib.h>
 #include <stdio.h>
-#include <malloc.h>
 #include "common/common.h"
+#include "dynamic_libs/os_functions.h"
+#include <string.h>
+#include <malloc.h>
 #include "main.h"
 #include "dynamic_libs/socket_functions.h"
 #include "dynamic_libs/gx2_functions.h"
@@ -12,7 +15,6 @@
 
 void *client;
 void *commandBlock;
-void *disassemblerBuffer;
 
 struct pygecko_bss_t {
 	int error, line;
@@ -26,26 +28,33 @@ struct pygecko_bss_t {
 #define EWOULDBLOCK 6
 #define FS_BUFFER_SIZE 0x1000
 #define DATA_BUFFER_SIZE 0x5000
-#define DISASSEMBLER_BUFFER_SIZE 0x200
+#define DISASSEMBLER_BUFFER_SIZE 0x1024
 
-#define ASSERT_VALID_BUFFER_SIZE(maximum, actual, message) \
-if(actual > maximum) { \
+#define ASSERT_MINIMUM_HOLDS(actual, minimum, variableName) \
+if(actual < minimum) { \
     char buffer[100] = {0}; \
-    __os_snprintf(buffer, 100, "%s: (maximum: %i, actual: %i)", message, maximum, actual); \
+    __os_snprintf(buffer, 100, "%s: Limit exceeded (minimum: %i, actual: %i)", variableName, minimum, actual); \
     OSFatal(buffer); \
 } \
 
-#define CHECK_FUNCTION_FAILED(returnValue, functionName) \
+#define ASSERT_MAXIMUM_HOLDS(maximum, actual, variableName) \
+if(actual > maximum) { \
+    char buffer[100] = {0}; \
+    __os_snprintf(buffer, 100, "%s: Limit exceeded (maximum: %i, actual: %i)", variableName, maximum, actual); \
+    OSFatal(buffer); \
+} \
+
+#define ASSERT_FUNCTION_SUCCEEDED(returnValue, functionName) \
     if (returnValue < 0) { \
         char buffer[100] = {0}; \
         __os_snprintf(buffer, 100, "%s failed with return value: %i", functionName, returnValue); \
         OSFatal(buffer); \
     } \
 
-#define ASSERT_VALID_ADDRESS(address, message) \
-    if(!OSIsAddressValid((void *) address)) { \
+#define ASSERT_VALID_EFFECTIVE_ADDRESS(effectiveAddress, message) \
+    if(!OSIsAddressValid((void *) effectiveAddress)) { \
     char buffer[100] = {0}; \
-        __os_snprintf(buffer, 100, "Address %04x invalid: %s", address, message); \
+        __os_snprintf(buffer, 100, "Address %04x invalid: %s", effectiveAddress, message); \
         OSFatal(buffer); \
     } \
 
@@ -63,7 +72,7 @@ if(actual > maximum) { \
         OSFatal(buffer); \
     } \
 
-#define CHECK_ALLOCATED(variable, name) \
+#define ASSERT_ALLOCATED(variable, name) \
     if(variable == 0) { \
         char buffer[50] = {0}; \
         __os_snprintf(buffer, 50, "%s allocation failed", name); \
@@ -152,13 +161,13 @@ void receiveString(struct pygecko_bss_t *bss, int clientfd, char *stringBuffer, 
 	// Receive the string length
 	char buffer[4] = {0};
 	int ret = recvwait(bss, clientfd, buffer, 4);
-	CHECK_FUNCTION_FAILED(ret, "recvwait (string length)")
+	ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (string length)")
 	int stringLength = ((int *) buffer)[0];
 
 	if (stringLength >= 0 && stringLength <= bufferSize) {
 		// Receive the actual string
 		ret = recvwait(bss, clientfd, stringBuffer, stringLength);
-		CHECK_FUNCTION_FAILED(ret, "recvwait (string)")
+		ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (string)")
 	} else {
 		OSFatal("String buffer size exceeded");
 	}
@@ -168,27 +177,56 @@ void considerInitializingFileSystem() {
 	if (!client) {
 		// Initialize the file system
 		int status = FSInit();
-		CHECK_FUNCTION_FAILED(status, "FSInit")
+		ASSERT_FUNCTION_SUCCEEDED(status, "FSInit")
 
 		// Allocate the client
 		client = malloc(FS_CLIENT_SIZE);
-		CHECK_ALLOCATED(client, "Client")
+		ASSERT_ALLOCATED(client, "Client")
 
 		// Register the client
 		status = FSAddClientEx(client, 0, -1);
-		CHECK_FUNCTION_FAILED(status, "FSAddClientEx")
+		ASSERT_FUNCTION_SUCCEEDED(status, "FSAddClientEx")
 
 		// Allocate the command block
 		commandBlock = malloc(FS_CMD_BLOCK_SIZE);
-		CHECK_ALLOCATED(commandBlock, "Command block")
+		ASSERT_ALLOCATED(commandBlock, "Command block")
 
 		FSInitCmdBlock(commandBlock);
 	}
 }
 
+char *disassemblerBuffer;
+void *disassemblerBufferPointer;
+
 void formatDisassembled(char *format, ...) {
-	disassemblerBuffer = malloc(DISASSEMBLER_BUFFER_SIZE);
-	__os_snprintf((char *) disassemblerBuffer, DISASSEMBLER_BUFFER_SIZE, format);
+	if (!disassemblerBuffer) {
+		disassemblerBuffer = malloc(DISASSEMBLER_BUFFER_SIZE);
+		ASSERT_ALLOCATED(disassemblerBuffer, "Disassembler buffer")
+		disassemblerBufferPointer = disassemblerBuffer;
+	}
+
+	va_list variableArguments;
+	va_start(variableArguments, format);
+	char *temporaryBuffer;
+	int printedBytesCount = vasprintf(&temporaryBuffer, format, variableArguments);
+	ASSERT_ALLOCATED(temporaryBuffer, "Temporary buffer")
+	ASSERT_MINIMUM_HOLDS(printedBytesCount, 1, "Printed bytes count")
+	va_end(variableArguments);
+
+	// Do not smash the buffer
+	long projectedSize = (void *) disassemblerBuffer - disassemblerBufferPointer + printedBytesCount;
+	if (projectedSize < DISASSEMBLER_BUFFER_SIZE) {
+		memcpy(disassemblerBuffer, temporaryBuffer, printedBytesCount);
+		disassemblerBuffer += printedBytesCount;
+	}
+
+	free(temporaryBuffer);
+}
+
+bool isValidDataAddress(int address) {
+	return OSIsAddressValid((const void *) address)
+		   && address >= 0x10000000
+		   && address < 0x50000000;
 }
 
 static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
@@ -252,6 +290,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 						length = DATA_BUFFER_SIZE;
 					}
 
+					// Figure out if all bytes are zero to possibly avoid sending them
 					int rangeIterationIndex = 0;
 					for (; rangeIterationIndex < length; rangeIterationIndex++) {
 						if (startingAddress[rangeIterationIndex] != 0) {
@@ -260,7 +299,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					}
 
 					if (rangeIterationIndex == length) {
-						// All read bytes are zero so we won't send the read bytes
+						// No need to send all zero bytes for performance
 						ret = sendbyte(bss, clientfd, 0xB0);
 						CHECK_ERROR(ret < 0)
 					} else {
@@ -310,7 +349,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x07: { /* cmd_disassemble_range */
-				// TODO Not working correctly
 				// Receive the starting, ending address and the disassembler options
 				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
 				CHECK_ERROR(ret < 0)
@@ -325,13 +363,14 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				// Send the disassembler buffer size
 				int length = DISASSEMBLER_BUFFER_SIZE;
 				ret = sendwait(bss, clientfd, &length, 4);
-				CHECK_FUNCTION_FAILED(ret, "sendwait (disassembler buffer size)")
+				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (disassembler buffer size)")
 
 				// Send the data
-				ret = sendwait(bss, clientfd, disassemblerBuffer, length);
-				CHECK_FUNCTION_FAILED(ret, "sendwait (disassembler buffer)")
+				ret = sendwait(bss, clientfd, disassemblerBufferPointer, length);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (disassembler buffer)")
 
-				free(disassemblerBuffer);
+				// Place the pointer back to the beginning
+				disassemblerBuffer = (char *) disassemblerBufferPointer;
 
 				break;
 			}
@@ -347,36 +386,71 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				// Disassemble and send each instruction
 				while (currentAddress < endingAddress) {
-					ret = sendwait(bss, clientfd, &currentAddress, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (disassembled address)")
-
+					((int *) buffer)[0] = currentAddress;
 					int value = *(int *) currentAddress;
-					ret = sendwait(bss, clientfd, &value, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (disassembled value)")
+					((int *) buffer)[1] = value;
+
+					ret = sendwait(bss, clientfd, buffer, 8);
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (disassembled value)")
 
 					int bufferSize = PPC_DISASM_MAX_BUFFER;
 					char *opCodeBuffer = malloc(bufferSize);
 
-					bool status = DisassemblePPCOpcode((u32 *) currentAddress, opCodeBuffer, (u32) bufferSize, OSGetSymbolName,
+					bool status = DisassemblePPCOpcode((u32 *) currentAddress, opCodeBuffer, (u32) bufferSize,
+													   OSGetSymbolName,
 													   (u32) disassemblerOptions);
 
 					ret = sendbyte(bss, clientfd, (unsigned char) status);
-					CHECK_FUNCTION_FAILED(ret, ("sendwait (disassembler status)"))
+					ASSERT_FUNCTION_SUCCEEDED(ret, ("sendwait (disassembler status)"))
 
 					if (status) {
-						// Send the disassembler buffer size constant
-						ret = sendwait(bss, clientfd, &bufferSize, 4);
-						CHECK_FUNCTION_FAILED(ret, "sendwait (disassembler buffer size)")
+						((int *) buffer)[0] = bufferSize;
+						memcpy(buffer + 4, opCodeBuffer, bufferSize);
 
-						// Send the disassembled buffer itself
-						ret = sendwait(bss, clientfd, opCodeBuffer, bufferSize);
-						CHECK_FUNCTION_FAILED(ret, "sendwait (disassembler buffer)")
+						// Send the disassembler buffer size constant
+						ret = sendwait(bss, clientfd, buffer, 4 + bufferSize);
+						ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (disassembler buffer)")
 					}
 
 					free(opCodeBuffer);
 
 					currentAddress += 4;
 				}
+
+				break;
+			}
+			case 0x09: { /* read_memory_compressed */
+				// https://www.gamedev.net/resources/_/technical/game-programming/in-memory-data-compression-and-decompression-r2279
+				int startingAddress = 0x10000000;
+				int length = 0x1000;
+
+				// Setup raw data buffer
+				void *rawBuffer = malloc(length);
+				ASSERT_ALLOCATED(rawBuffer, "Raw buffer")
+				memcpy(rawBuffer, (const void *) startingAddress, length);
+
+				// Setup compressed buffer
+				int compressedBufferSize = (int) (length + (length * 0.1) + 12) + 1;
+				void *compressedBuffer = malloc(compressedBufferSize);
+				ASSERT_ALLOCATED(compressedBuffer, "Compressed buffer")
+
+				int destinationBufferSize;
+				int status = compress2((char *) compressedBuffer, &destinationBufferSize, (const char *) rawBuffer, length, Z_BEST_COMPRESSION);
+
+				ret = sendwait(bss, clientfd, &status, 4);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (status)")
+
+				if (status == Z_OK) {
+					// Send the compressed buffer size and content
+					((int *) buffer)[0] = destinationBufferSize;
+					memcpy(buffer + 4, compressedBuffer, destinationBufferSize);
+
+					ret = sendwait(bss, clientfd, buffer, 4 + destinationBufferSize);
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (Compressed data)")
+				}
+
+				free(rawBuffer);
+				free(compressedBuffer);
 
 				break;
 			}
@@ -453,46 +527,46 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					// Send the OK status
 					((int *) buffer)[0] = status;
 					ret = sendwait(bss, clientfd, buffer, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (OK status)")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (OK status)")
 
 					// Retrieve the file statistics
 					FSStat stat;
 					ret = FSGetStatFile(client, commandBlock, handle, &stat, FS_RET_ALL_ERROR);
-					CHECK_FUNCTION_FAILED(ret, "FSGetStatFile")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "FSGetStatFile")
 
 					// Send the total bytes count
 					int totalBytes = (int) stat.size;
 					((int *) buffer)[0] = totalBytes;
 					ret = sendwait(bss, clientfd, buffer, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (total bytes)")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (total bytes)")
 
 					// Allocate the file bytes buffer
 					unsigned int file_buffer_size = 0x2000;
 					char *fileBuffer = (char *) OSAllocFromSystem(file_buffer_size, FS_IO_BUFFER_ALIGN);
-					CHECK_ALLOCATED(fileBuffer, "File buffer")
+					ASSERT_ALLOCATED(fileBuffer, "File buffer")
 
 					int totalBytesRead = 0;
 					while (totalBytesRead < totalBytes) {
 						int bytesRead = FSReadFile(client, commandBlock, fileBuffer, 1, file_buffer_size,
 												   handle, 0, FS_RET_ALL_ERROR);
-						CHECK_FUNCTION_FAILED(bytesRead, "FSReadFile")
+						ASSERT_FUNCTION_SUCCEEDED(bytesRead, "FSReadFile")
 
 						// Send file bytes
 						ret = sendwait(bss, clientfd, fileBuffer, bytesRead);
-						CHECK_FUNCTION_FAILED(ret, "sendwait (file buffer)")
+						ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (file buffer)")
 
 						totalBytesRead += bytesRead;
 					}
 
 					ret = FSCloseFile(client, commandBlock, handle, FS_RET_ALL_ERROR);
-					CHECK_FUNCTION_FAILED(ret, "FSCloseFile")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "FSCloseFile")
 
 					OSFreeToSystem(fileBuffer);
 				} else {
 					// Send the error status
 					((int *) buffer)[0] = status;
 					ret = sendwait(bss, clientfd, buffer, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (error status)")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (error status)")
 				}
 
 				break;
@@ -512,7 +586,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					// Send the success status
 					((int *) buffer)[0] = ret;
 					ret = sendwait(bss, clientfd, buffer, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (success status)")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (success status)")
 
 					int entrySize = sizeof(FSDirEntry);
 
@@ -521,26 +595,26 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 						// Let the client know how much data is going to be sent (even though this is constant)
 						((int *) buffer)[0] = entrySize;
 						ret = sendwait(bss, clientfd, buffer, 4);
-						CHECK_FUNCTION_FAILED(ret, "sendwait (data coming)")
+						ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (data coming)")
 
 						// Send the struct
 						ret = sendwait(bss, clientfd, &entry, entrySize);
-						CHECK_FUNCTION_FAILED(ret, "sendwait (directory entry)")
+						ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (directory entry)")
 					}
 
 					// No more data will be sent, hence a 0 byte
 					((int *) buffer)[0] = 0;
 					ret = sendwait(bss, clientfd, buffer, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (no more data)")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (no more data)")
 
 					// Done, close the directory also
 					ret = FSCloseDir(client, commandBlock, handle, FS_RET_ALL_ERROR);
-					CHECK_FUNCTION_FAILED(ret, "FSCloseDir")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "FSCloseDir")
 				} else {
 					// Send the status
 					((int *) buffer)[0] = ret;
 					ret = sendwait(bss, clientfd, buffer, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (error status)")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (error status)")
 				}
 
 				break;
@@ -562,37 +636,37 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					// Send the OK status
 					((int *) buffer)[0] = status;
 					ret = sendwait(bss, clientfd, buffer, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (OK status)")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (OK status)")
 
 					// Set the file handle position to the beginning
 					ret = FSSetPosFile(client, commandBlock, handle, 0, FS_RET_ALL_ERROR);
-					CHECK_FUNCTION_FAILED(ret, "FSSetPosFile")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "FSSetPosFile")
 
 					// Allocate the file bytes buffer
 					unsigned int file_buffer_size = 0x2000;
 					char *fileBuffer = (char *) OSAllocFromSystem(file_buffer_size, FS_IO_BUFFER_ALIGN);
-					CHECK_ALLOCATED(fileBuffer, "File buffer")
+					ASSERT_ALLOCATED(fileBuffer, "File buffer")
 
 					// Send the maximum file buffer size
 					ret = sendwait(bss, clientfd, &file_buffer_size, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (maximum file buffer size)")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (maximum file buffer size)")
 
 					while (true) {
 						// Receive the data bytes length
 						unsigned int dataLength;
 						ret = recvwait(bss, clientfd, &dataLength, 4);
-						CHECK_FUNCTION_FAILED(ret, "recvwait (File bytes length)")
-						ASSERT_VALID_BUFFER_SIZE(file_buffer_size, dataLength, "File buffer overrun attempted")
+						ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (File bytes length)")
+						ASSERT_MAXIMUM_HOLDS(file_buffer_size, dataLength, "File buffer overrun attempted")
 
 						if (dataLength > 0) {
 							// Receive the data
 							ret = recvwait(bss, clientfd, fileBuffer, dataLength);
-							CHECK_FUNCTION_FAILED(ret, "recvwait (File buffer)")
+							ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (File buffer)")
 
 							// Write the data and advance file handle position
 							ret = FSWriteFile(client, commandBlock, fileBuffer, 1,
 											  dataLength, handle, 0, FS_RET_ALL_ERROR);
-							CHECK_FUNCTION_FAILED(ret, "FSWriteFile")
+							ASSERT_FUNCTION_SUCCEEDED(ret, "FSWriteFile")
 						} else {
 							// Done
 							break;
@@ -605,7 +679,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 					// Close the file
 					ret = FSCloseFile(client, commandBlock, handle, FS_RET_ALL_ERROR);
-					CHECK_FUNCTION_FAILED(ret, "FSCloseFile")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "FSCloseFile")
 
 					// Free the file buffer
 					OSFreeToSystem(fileBuffer);
@@ -613,7 +687,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					// Send the status
 					((int *) buffer)[0] = status;
 					ret = sendwait(bss, clientfd, buffer, 4);
-					CHECK_FUNCTION_FAILED(ret, "sendwait (status)")
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (status)")
 				}
 
 				break;
@@ -629,14 +703,14 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				int OS_THREAD_SIZE = 0x6A0;
 
 				int currentThreadAddress = OSGetCurrentThread();
-				ASSERT_VALID_ADDRESS(currentThreadAddress, "OSGetCurrentThread")
+				ASSERT_VALID_EFFECTIVE_ADDRESS(currentThreadAddress, "OSGetCurrentThread")
 				int iterationThreadAddress = currentThreadAddress;
 				int temporaryThreadAddress;
 
 				// Follow "previous thread" pointers back to the beginning
 				while ((temporaryThreadAddress = *(int *) (iterationThreadAddress + 0x390)) != 0) {
 					iterationThreadAddress = temporaryThreadAddress;
-					ASSERT_VALID_ADDRESS(iterationThreadAddress, "iterationThreadAddress going backwards")
+					ASSERT_VALID_EFFECTIVE_ADDRESS(iterationThreadAddress, "iterationThreadAddress going backwards")
 				}
 
 				// Send all threads by following the "next thread" pointers
@@ -650,7 +724,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					CHECK_ERROR(ret < 0)
 
 					iterationThreadAddress = temporaryThreadAddress;
-					ASSERT_VALID_ADDRESS(iterationThreadAddress, "iterationThreadAddress going forwards")
+					ASSERT_VALID_EFFECTIVE_ADDRESS(iterationThreadAddress, "iterationThreadAddress going forwards")
 				}
 
 				// The previous while would skip the last thread so send it also
@@ -684,7 +758,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			}
 			case 0x60: { /* cmd_follow_pointer */
 				ret = recvwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (Pointer address and offsets count)")
 
 				// Retrieve the pointer address and amount of offsets
 				int baseAddress = ((int *) buffer)[0];
@@ -692,34 +766,39 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				// Receive the offsets
 				ret = recvwait(bss, clientfd, buffer, offsetsCount * 4);
-				CHECK_ERROR(ret < 0);
-				int *offsets = (int *) buffer;
+				ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (offsets)")
+				int offsets[offsetsCount];
+				int offsetIndex = 0;
+				for (; offsetIndex < offsetsCount; offsetIndex++) {
+					offsets[offsetIndex] = ((int *) buffer)[offsetIndex];
+				}
 
 				int destinationAddress = baseAddress;
+				if (isValidDataAddress(destinationAddress)) {
+					// Apply pointer offsets
+					for (offsetIndex = 0; offsetIndex < offsetsCount; offsetIndex++) {
+						int pointerValue = *(int *) destinationAddress;
+						int offset = offsets[offsetIndex];
+						destinationAddress = pointerValue + offset;
 
-				// Apply pointer offsets
-				for (int offsetIndex = 0; offsetIndex < offsetsCount; offsetIndex++) {
-					int pointerValue = *(int *) destinationAddress;
-					int offset = offsets[offsetIndex];
-					destinationAddress = pointerValue + offset;
+						// Validate the pointer address
+						bool isValidDestinationAddress = isValidDataAddress(destinationAddress);
 
-					// Validate the pointer address
-					bool isValidDestinationAddress = OSIsAddressValid((const void *) destinationAddress)
-													 && destinationAddress >= 0x10000000
-													 && destinationAddress < 0x50000000;
+						// Bail out if invalid
+						if (!isValidDestinationAddress) {
+							destinationAddress = -1;
 
-					// Bail out if invalid
-					if (!isValidDestinationAddress) {
-						destinationAddress = -1;
-
-						break;
+							break;
+						}
 					}
+				} else {
+					destinationAddress = -1;
 				}
 
 				// Return the destination address
 				((int *) buffer)[0] = destinationAddress;
 				ret = sendwait(bss, clientfd, buffer, 4);
-				CHECK_ERROR(ret < 0);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (destination address)")
 
 				break;
 			}

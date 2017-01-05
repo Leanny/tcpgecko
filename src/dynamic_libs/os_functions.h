@@ -44,6 +44,23 @@ typedef void *(*DisasmGetSym)(u32 addr, u8 *symbolName, u32 nameBufSize);
 #define PPC_DISASM_EMIT_ADDR   0x00000080  // emit only addresses + disassembly
 #define PPC_DISASM_EMIT_FUNCS  0x00000100  // emit function names before and during disassembly
 
+/* zlib */
+
+#define Z_NO_COMPRESSION         0
+#define Z_BEST_SPEED             1
+#define Z_BEST_COMPRESSION       9
+#define Z_DEFAULT_COMPRESSION  (-1)
+
+#define Z_OK            0
+#define Z_STREAM_END    1
+#define Z_NEED_DICT     2
+#define Z_ERRNO        (-1)
+#define Z_STREAM_ERROR (-2)
+#define Z_DATA_ERROR   (-3)
+#define Z_MEM_ERROR    (-4)
+#define Z_BUF_ERROR    (-5)
+#define Z_VERSION_ERROR (-6)
+
 #define BUS_SPEED                       248625000
 #define SECS_TO_TICKS(sec)              (((unsigned long long)(sec)) * (BUS_SPEED/4))
 #define MILLISECS_TO_TICKS(msec)        (SECS_TO_TICKS(msec) / 1000)
@@ -186,11 +203,16 @@ extern int (*OSAllocFromSystem)(unsigned int size, unsigned int align);
 
 extern int (*OSFreeToSystem)(void *aPtr);
 
-extern void (*DisassemblePPCRange)(void *rangeStart, void *rangeEnd, DisasmReport disasmReport, DisasmGetSym disasmGetSym, u32 disasmOptions);
+extern void
+(*DisassemblePPCRange)(void *rangeStart, void *rangeEnd, DisasmReport disasmReport, DisasmGetSym disasmGetSym,
+					   u32 disasmOptions);
 
-extern bool (*DisassemblePPCOpcode)(u32 *opcode, char *outputBuffer, u32 bufferSize, DisasmGetSym disasmGetSym, u32 disasmOptions);
+extern bool
+(*DisassemblePPCOpcode)(u32 *opcode, char *outputBuffer, u32 bufferSize, DisasmGetSym disasmGetSym, u32 disasmOptions);
 
 extern void *(*OSGetSymbolName)(u32 addr, u8 *symbolName, u32 nameBufSize);
+
+extern int (*compress2)(char *dest, int *destLen, const char *source, int sourceLen, int level);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! MCP functions
