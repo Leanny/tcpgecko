@@ -46,7 +46,7 @@ typedef void *(*DisasmGetSym)(u32 addr, u8 *symbolName, u32 nameBufSize);
 
 /* zlib */
 
-#define Z_NO_COMPRESSION         0
+/*#define Z_NO_COMPRESSION         0
 #define Z_BEST_SPEED             1
 #define Z_BEST_COMPRESSION       9
 #define Z_DEFAULT_COMPRESSION  (-1)
@@ -59,7 +59,7 @@ typedef void *(*DisasmGetSym)(u32 addr, u8 *symbolName, u32 nameBufSize);
 #define Z_DATA_ERROR   (-3)
 #define Z_MEM_ERROR    (-4)
 #define Z_BUF_ERROR    (-5)
-#define Z_VERSION_ERROR (-6)
+#define Z_VERSION_ERROR (-6)*/
 
 #define BUS_SPEED                       248625000
 #define SECS_TO_TICKS(sec)              (((unsigned long long)(sec)) * (BUS_SPEED/4))
@@ -212,7 +212,7 @@ extern bool
 
 extern void *(*OSGetSymbolName)(u32 addr, u8 *symbolName, u32 nameBufSize);
 
-extern int (*compress2)(char *dest, int *destLen, const char *source, int sourceLen, int level);
+// extern int (*compress2)(char *dest, int *destLen, const char *source, int sourceLen, int level);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //! MCP functions

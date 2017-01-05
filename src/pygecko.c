@@ -12,6 +12,7 @@
 #include "dynamic_libs/fs_functions.h"
 #include "common/fs_defs.h"
 #include "system/exception_handler.h"
+// #include <zlib.h>
 
 void *client;
 void *commandBlock;
@@ -420,22 +421,74 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x09: { /* read_memory_compressed */
-				// https://www.gamedev.net/resources/_/technical/game-programming/in-memory-data-compression-and-decompression-r2279
-				/*int startingAddress = 0x10000000;
-				int length = 0x1000;
+				/*// Receive the starting address and length
+				ret = recvwait(bss, clientfd, buffer, 4 + 4);
+				CHECK_ERROR(ret < 0)
+				int startingAddress = ((int *) buffer)[0];
+				unsigned int length = ((unsigned int *) buffer)[1];
 
 				// Setup raw data buffer
-				void *rawBuffer = malloc(length);
-				ASSERT_ALLOCATED(rawBuffer, "Raw buffer")
-				memcpy(rawBuffer, (const void *) startingAddress, length);
+				void *inputBuffer = malloc(length);
+				ASSERT_ALLOCATED(inputBuffer, "Raw buffer")
+				memcpy(inputBuffer, (const void *) startingAddress, length);
+
+				// Setup output buffer using system memory due to out of memory issues
+				unsigned int outputBufferSize = length * 2;
+				void *outputBuffer = (void *) OSAllocFromSystem(outputBufferSize, 0x4);
+
+				z_stream stream;
+				memset(&stream, 0, sizeof(stream));
+
+				stream.zalloc = Z_NULL;
+				stream.zfree = Z_NULL;
+				stream.opaque = Z_NULL;
+
+				// Initialize the stream struct
+				int ret = deflateInit(&stream, Z_BEST_COMPRESSION);
+				ASSERT_INTEGER(ret, Z_OK, "deflateInit");
+
+				// Supply the data
+				stream.avail_in = length;
+				stream.next_in = (Bytef *) inputBuffer;
+				stream.avail_out = outputBufferSize;
+				stream.next_out = (Bytef *) outputBuffer;
+
+				// Deflate and finish
+				ret = deflate(&stream, Z_FINISH);
+				ASSERT_INTEGER(ret, Z_OK, "deflate");
+				ret = deflateEnd(&stream);
+				ASSERT_INTEGER(ret, Z_OK, "deflateEnd");
+
+				int deflatedSize = (int) ((void *) stream.next_out - outputBuffer);
+
+				// Send the compressed buffer size and content
+				((int *) buffer)[0] = deflatedSize;
+				memcpy(buffer + 4, outputBuffer, deflatedSize);
+				ret = sendwait(bss, clientfd, buffer, 4 + deflatedSize);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (Compressed data)")
+
+				// Clean up again
+				free(inputBuffer);
+				OSFreeToSystem(outputBuffer);*/
+
+				break;
+
+				// https://www.gamedev.net/resources/_/technical/game-programming/in-memory-data-compression-and-decompression-r2279
+				/*
 
 				// Setup compressed buffer
-				int compressedBufferSize = (int) (length + (length * 0.1) + 12) + 1;
-				void *compressedBuffer = malloc(compressedBufferSize);
+				unsigned int compressedBufferSize = length * 2;
+				void *compressedBuffer = (void *) OSAllocFromSystem(compressedBufferSize, 0x4);
 				ASSERT_ALLOCATED(compressedBuffer, "Compressed buffer")
 
+				unsigned int zlib_handle;
+				OSDynLoad_Acquire("zlib125.rpl", (u32 *) &zlib_handle);
+				int (*compress2)(char *, int *, const char *, int, int);
+				OSDynLoad_FindExport((u32) zlib_handle, 0, "compress2", &compress2);
+
 				int destinationBufferSize;
-				int status = compress2((char *) compressedBuffer, &destinationBufferSize, (const char *) rawBuffer, length, Z_BEST_COMPRESSION);
+				int status = compress2((char *) compressedBuffer, &destinationBufferSize,
+									   (const char *) rawBuffer, length, Z_DEFAULT_COMPRESSION);
 
 				ret = sendwait(bss, clientfd, &status, 4);
 				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (status)")
@@ -450,9 +503,9 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				}
 
 				free(rawBuffer);
-				free(compressedBuffer);*/
+				OSFreeToSystem(compressedBuffer);
 
-				break;
+				break;*/
 			}
 			case 0x0b: { /* cmd_writekern */
 				void *ptr, *value;
