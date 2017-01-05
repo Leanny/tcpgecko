@@ -421,7 +421,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			}
 			case 0x09: { /* read_memory_compressed */
 				// https://www.gamedev.net/resources/_/technical/game-programming/in-memory-data-compression-and-decompression-r2279
-				int startingAddress = 0x10000000;
+				/*int startingAddress = 0x10000000;
 				int length = 0x1000;
 
 				// Setup raw data buffer
@@ -450,7 +450,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				}
 
 				free(rawBuffer);
-				free(compressedBuffer);
+				free(compressedBuffer);*/
 
 				break;
 			}
