@@ -24,7 +24,11 @@
 
 int CCHandler;
 
-void startMiiMaker();
+void startMiiMaker() {
+	char buf_vol_odd[20];
+	snprintf(buf_vol_odd, sizeof(buf_vol_odd), "%s", "/vol/storage_odd03");
+	_SYSLaunchTitleByPathFromLauncher(buf_vol_odd, 18, 0);
+}
 
 char *buffer[FS_BUFFER_SIZE];
 
@@ -215,10 +219,4 @@ int Menu_Main(void) {
 	}
 
 	return EXIT_RELAUNCH_ON_LOAD;
-}
-
-void startMiiMaker() {
-	char buf_vol_odd[20];
-	snprintf(buf_vol_odd, sizeof(buf_vol_odd), "%s", "/vol/storage_odd03");
-	_SYSLaunchTitleByPathFromLauncher(buf_vol_odd, 18, 0);
 }

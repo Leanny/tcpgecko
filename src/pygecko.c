@@ -531,6 +531,36 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				sendwait(bss, clientfd, buffer, 4);
 				break;
 			}
+			case 0x0D: { /* cmd_take_screenshot */
+				GX2ColorBuffer colorBuffer;
+				// TODO Initialize colorBuffer!
+				GX2Surface surface = colorBuffer.surface;
+				void *image_data = surface.image_data;
+				u32 image_size = surface.image_size;
+
+				// Send the image size so that the client knows how much to read
+				ret = sendwait(bss, clientfd, &image_size, 4);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (image size)")
+
+				unsigned int imageBytesSent = 0;
+				while (imageBytesSent < image_size) {
+					int length = image_size - imageBytesSent;
+
+					// Do not smash the buffer
+					if (length > DATA_BUFFER_SIZE) {
+						length = DATA_BUFFER_SIZE;
+					}
+
+					// Send the image bytes
+					memcpy(buffer, image_data, length);
+					ret = sendwait(bss, clientfd, buffer, length);
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (image bytes)")
+
+					imageBytesSent += length;
+				}
+
+				break;
+			}
 			case 0x41: { /* cmd_upload */
 				// Receive the starting and ending addresses
 				ret = recvwait(bss, clientfd, buffer, 8);
@@ -1025,6 +1055,9 @@ static int start(int argc, void *argv) {
 		if (sockfd != -1)
 			socketclose(sockfd);
 		bss->error = ret;
+
+		// Fix the console freezing when e.g. going to the friend list
+		GX2WaitForVsync();
 	}
 
 	return 0;
