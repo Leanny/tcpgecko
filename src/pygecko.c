@@ -230,6 +230,10 @@ bool isValidDataAddress(int address) {
 		   && address < 0x50000000;
 }
 
+int roundUpToAligned(int number) {
+	return (number + 3) & ~0x03;
+}
+
 static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	int ret;
 
@@ -391,7 +395,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				while (currentAddress < endingAddress) {
 					int currentIntegerIndex = 0;
 
-					// Fill the buffer
 					while ((currentIntegerIndex < (DATA_BUFFER_SIZE / integerSize))
 						   && (currentAddress < endingAddress)) {
 						int value = *(int *) currentAddress;
@@ -403,13 +406,15 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 						((int *) buffer)[currentIntegerIndex++] = status;
 
-						if (status == 0) {
-							// Disassembling failed, use this string
-							strcpy(opCodeBuffer, "(invalid)");
-						}
+						if (status == 1) {
+							// Send the length of the opCode buffer string
+							int length = strlen(opCodeBuffer);
+							((int *) buffer)[currentIntegerIndex++] = length;
 
-						memcpy(buffer + (currentIntegerIndex * integerSize), opCodeBuffer, bufferSize);
-						currentIntegerIndex += (bufferSize / integerSize);
+							// Send the opCode buffer itself
+							memcpy(buffer + (currentIntegerIndex * integerSize), opCodeBuffer, length);
+							currentIntegerIndex += (roundUpToAligned(length) / integerSize);
+						}
 
 						free(opCodeBuffer);
 						currentAddress += integerSize;
@@ -419,7 +424,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					ret = sendwait(bss, clientfd, &bytesToSend, 4);
 					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (Buffer size)")
 
-					// VALUE(4)|STATUS(4)|DISASSEMBLED(64)
+					// VALUE(4)|STATUS(4)|LENGTH(4)|DISASSEMBLED(LENGTH)
 					ret = sendwait(bss, clientfd, buffer, bytesToSend);
 					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (Buffer)")
 				}
