@@ -376,7 +376,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case 0x08: { /* cmd_memory_disassemble */
-				// Receive the starting address and disassembler options
+				// Receive the starting address, ending address and disassembler options
 				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
 				CHECK_ERROR(ret < 0)
 				int startingAddress = ((int *) buffer)[0];
@@ -384,39 +384,49 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				int disassemblerOptions = ((int *) buffer)[2];
 
 				int currentAddress = startingAddress;
+				int bufferSize = PPC_DISASM_MAX_BUFFER;
+				int integerSize = 4;
 
-				// Disassemble and send each instruction
+				// Disassemble everything
 				while (currentAddress < endingAddress) {
-					((int *) buffer)[0] = currentAddress;
-					int value = *(int *) currentAddress;
-					((int *) buffer)[1] = value;
+					int currentIntegerIndex = 0;
 
-					ret = sendwait(bss, clientfd, buffer, 8);
-					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (disassembled value)")
+					// Fill the buffer
+					while ((currentIntegerIndex < (DATA_BUFFER_SIZE / integerSize))
+						   && (currentAddress < endingAddress)) {
+						int value = *(int *) currentAddress;
+						((int *) buffer)[currentIntegerIndex++] = value;
+						char *opCodeBuffer = malloc(bufferSize);
+						bool status = DisassemblePPCOpcode((u32 *) currentAddress, opCodeBuffer, (u32) bufferSize,
+														   OSGetSymbolName,
+														   (u32) disassemblerOptions);
 
-					int bufferSize = PPC_DISASM_MAX_BUFFER;
-					char *opCodeBuffer = malloc(bufferSize);
+						((int *) buffer)[currentIntegerIndex++] = status;
 
-					bool status = DisassemblePPCOpcode((u32 *) currentAddress, opCodeBuffer, (u32) bufferSize,
-													   OSGetSymbolName,
-													   (u32) disassemblerOptions);
+						if (status == 0) {
+							// Disassembling failed, use this string
+							strcpy(opCodeBuffer, "(invalid)");
+						}
 
-					ret = sendbyte(bss, clientfd, (unsigned char) status);
-					ASSERT_FUNCTION_SUCCEEDED(ret, ("sendwait (disassembler status)"))
+						memcpy(buffer + (currentIntegerIndex * integerSize), opCodeBuffer, bufferSize);
+						currentIntegerIndex += (bufferSize / integerSize);
 
-					if (status) {
-						((int *) buffer)[0] = bufferSize;
-						memcpy(buffer + 4, opCodeBuffer, bufferSize);
-
-						// Send the disassembler buffer size constant
-						ret = sendwait(bss, clientfd, buffer, 4 + bufferSize);
-						ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (disassembler buffer)")
+						free(opCodeBuffer);
+						currentAddress += integerSize;
 					}
 
-					free(opCodeBuffer);
+					int bytesToSend = currentIntegerIndex * integerSize;
+					ret = sendwait(bss, clientfd, &bytesToSend, 4);
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (Buffer size)")
 
-					currentAddress += 4;
+					// VALUE(4)|STATUS(4)|DISASSEMBLED(64)
+					ret = sendwait(bss, clientfd, buffer, bytesToSend);
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (Buffer)")
 				}
+
+				int bytesToSend = 0;
+				ret = sendwait(bss, clientfd, &bytesToSend, 4);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (No more bytes)")
 
 				break;
 			}
