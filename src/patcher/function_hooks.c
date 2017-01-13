@@ -23,6 +23,7 @@
 
 DECL(void, GX2CopyColorBufferToScanBuffer, const GX2ColorBuffer *colorBuffer,
 	 s32 scan_target) {
+	// TODO Does not execute
 	GX2Surface surface = colorBuffer->surface;
 	u32 image_size = surface.image_size;
 	char buffer[100] = {0};

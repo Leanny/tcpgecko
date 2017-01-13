@@ -27,7 +27,7 @@ struct pygecko_bss_t {
 /* TCP Gecko Commands */
 #define COMMAND_READ_MEMORY 0x04
 #define COMMAND_VALIDATE_ADDRESS_RANGE 0x06
-#define COMMAND_DISASSEMBLE_RANGE 0x07 // TODO Remove either this disassembler or the other depending on which one is better
+// #define COMMAND_DISASSEMBLE_RANGE 0x07 // TODO Remove either this disassembler or the other depending on which one is better
 #define COMMAND_MEMORY_DISASSEMBLE 0x08
 #define COMMAND_READ_MEMORY_COMPRESSED 0x09 // TODO Remove command when done and integrate in read memory
 #define COMMAND_KERNEL_WRITE 0x0B
@@ -40,8 +40,8 @@ struct pygecko_bss_t {
 #define COMMAND_REPLACE_FILE 0x54 // TODO Test this
 #define COMMAND_GET_CODE_HANDLER_ADDRESS 0x55
 #define COMMAND_READ_THREADS 0x56
-#define COMMAND_GET_PERSISTENT_ID 0x57 // TODO Finish this
-#define COMMAND_WRITE_SCREEN 0x58 // TODO Finish this
+#define COMMAND_ACCOUNT_IDENTIFIER 0x57 // TODO Finish this
+#define COMMAND_WRITE_SCREEN 0x58 // TODO Exception DSI
 #define COMMAND_FOLLOW_POINTER 0x60
 #define COMMAND_RPC 0x70
 #define COMMAND_GET_SYMBOL 0x71
@@ -137,7 +137,7 @@ int kernelCopyThread(int argc, void *argv) {
 	}
 }
 
-void runKernelCopyThread() {
+void startKernelCopyThread() {
 	unsigned int stack = (unsigned int) memalign(0x40, 0x100);
 	ASSERT_ALLOCATED(stack, "Kernel copy thread stack")
 	stack += 0x100;
@@ -145,7 +145,7 @@ void runKernelCopyThread() {
 	ASSERT_ALLOCATED(thread, "Kernel copy thread")
 
 	int status = OSCreateThread(thread, kernelCopyThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0,
-								2 | 0x10 | 8);
+								OS_THREAD_ATTR_AFFINITY_CORE1 | OS_THREAD_ATTR_PINNED_AFFINITY | OS_THREAD_ATTR_DETACH);
 	ASSERT_INTEGER(status, 1, "Creating kernel copy thread")
 	// OSSetThreadName(thread, "Kernel Copier");
 	OSResumeThread(thread);
@@ -212,6 +212,7 @@ static int sendbyte(struct pygecko_bss_t *bss, int sock, unsigned char byte) {
 }
 
 void writeScreen(const char *message) {
+	// Set the text for both buffers
 	for (unsigned int bufferIndex = 0; bufferIndex < 2; bufferIndex++) {
 		OSScreenClearBufferEx(bufferIndex, 0);
 		OSScreenPutFontEx(bufferIndex, 0, 0, message);
@@ -224,10 +225,10 @@ void receiveString(struct pygecko_bss_t *bss,
 				   char *stringBuffer,
 				   int bufferSize) {
 	// Receive the string length
-	char buffer[4] = {0};
-	int ret = recvwait(bss, clientfd, buffer, 4);
+	char lengthBuffer[4] = {0};
+	int ret = recvwait(bss, clientfd, lengthBuffer, 4);
 	ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (string length)")
-	int stringLength = ((int *) buffer)[0];
+	int stringLength = ((int *) lengthBuffer)[0];
 
 	if (stringLength >= 0 && stringLength <= bufferSize) {
 		// Receive the actual string
@@ -378,7 +379,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				sendbyte(bss, clientfd, (unsigned char) isAddressRangeValid);
 				break;
 			}
-			case COMMAND_DISASSEMBLE_RANGE: {
+			/*case COMMAND_DISASSEMBLE_RANGE: {
 				// Receive the starting, ending address and the disassembler options
 				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
 				CHECK_ERROR(ret < 0)
@@ -403,7 +404,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				disassemblerBuffer = (char *) disassemblerBufferPointer;
 
 				break;
-			}
+			}*/
 			case COMMAND_MEMORY_DISASSEMBLE: {
 				// Receive the starting address, ending address and disassembler options
 				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
@@ -858,19 +859,51 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case COMMAND_GET_PERSISTENT_ID : {
-				// TODO Get persistent ID
-				/*else if (cmd == 17) { //Get persistent id
-				a->nn_act_Initialize();
-				u8 slot = a->nn_act_GetSlotNo();
-				u32 persistentId = a->nn_act_GetPersistentIdEx(slot);
-				sendall(client, &persistentId, 4);
-				a->nn_act_Finalize();
-			}*/
+			case COMMAND_ACCOUNT_IDENTIFIER: {
+				// Acquire the RPL
+				unsigned int nn_act_handle;
+				OSDynLoad_Acquire("nn_act.rpl", &nn_act_handle);
+
+				// Acquire the functions via their mangled file names
+				int (*nn_act_Initialize)(void);
+				OSDynLoad_FindExport(nn_act_handle, 0, "Initialize__Q2_2nn3actFv", &nn_act_Initialize);
+				ASSERT_ALLOCATED(nn_act_Initialize, "nn_act_Initialize")
+				unsigned char (*nn_act_GetSlotNo)(void);
+				OSDynLoad_FindExport(nn_act_handle, 0, "GetSlotNo__Q2_2nn3actFv", &nn_act_GetSlotNo);
+				ASSERT_ALLOCATED(nn_act_GetSlotNo, "nn_act_GetSlotNo")
+				unsigned int (*nn_act_GetPersistentIdEx)(unsigned char);
+				OSDynLoad_FindExport(nn_act_handle, 0, "GetPersistentIdEx__Q2_2nn3actFUc", &nn_act_GetPersistentIdEx);
+				ASSERT_ALLOCATED(nn_act_GetPersistentIdEx, "nn_act_GetPersistentIdEx")
+				int (*nn_act_Finalize)(void);
+				OSDynLoad_FindExport(nn_act_handle, 0, "Finalize__Q2_2nn3actFv", &nn_act_Finalize);
+				ASSERT_ALLOCATED(nn_act_Finalize, "nn_act_Finalize")
+
+				// Get the identifier
+				ret = nn_act_Initialize();
+				// ASSERT_INTEGER(ret, 1, "Initializing account library");
+				unsigned char slotNumber = nn_act_GetSlotNo();
+				unsigned int persistentIdentifier = nn_act_GetPersistentIdEx(slotNumber);
+				ret = nn_act_Finalize();
+				ASSERT_FUNCTION_SUCCEEDED(ret, "nn_act_Finalize");
+
+				// Send it
+				ret = sendwait(bss, clientfd, &persistentIdentifier, 4);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (persistent identifier)")
+
 				break;
 			}
 			case COMMAND_WRITE_SCREEN: {
-				// TODO Write screen
+				char message[100];
+				ret = recvwait(bss, clientfd, buffer, 4);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (write screen seconds)")
+				int seconds = ((int *) buffer)[0];
+				receiveString(bss, clientfd, message, 100);
+				writeScreen(message);
+				usleep(seconds);
+
+				// Clear screen
+				OSScreenClearBufferEx(0, 0);
+				OSScreenClearBufferEx(1, 0);
 
 				break;
 			}
@@ -1032,10 +1065,13 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case COMMAND_RUN_KERNEL_COPY_THREAD: {
+				// TODO Nothing happens?
 				if (!kernelCopyThreadStarted) {
 					kernelCopyThreadStarted = true;
-					runKernelCopyThread();
+					startKernelCopyThread();
 				}
+
+				break;
 			}
 			default:
 				reportIllegalCommandByte(ret);
@@ -1128,7 +1164,10 @@ void start_pygecko() {
 	void *thread = memalign(0x40, 0x1000);
 	ASSERT_ALLOCATED(thread, "TCP Gecko thread")
 
-	int status = OSCreateThread(thread, CCThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0, 2 | 0x10 | 8);
+	int status = OSCreateThread(thread, CCThread, 1,
+								NULL, (u32) stack + sizeof(stack),
+								sizeof(stack), 0,
+								OS_THREAD_ATTR_AFFINITY_CORE1 | OS_THREAD_ATTR_PINNED_AFFINITY | OS_THREAD_ATTR_DETACH);
 	ASSERT_INTEGER(status, 1, "Creating TCP Gecko thread")
 	// OSSetThreadName(thread, "TCP Gecko");
 	OSResumeThread(thread);
