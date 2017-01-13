@@ -45,9 +45,8 @@ struct pygecko_bss_t {
 #define COMMAND_FOLLOW_POINTER 0x60
 #define COMMAND_RPC 0x70
 #define COMMAND_GET_SYMBOL 0x71
-#define COMMAND_SEARCH_32 0x72 // TODO Remove when below is done
-#define COMMAND_MEMORY_SEARCH 0x73 // TODO Implement this
-#define COMMAND_SERVER_VERSION 0x99 // TODO Test this
+#define COMMAND_MEMORY_SEARCH 0x73
+#define COMMAND_SERVER_VERSION 0x99
 #define COMMAND_OS_VERSION 0x9A
 #define COMMAND_RUN_KERNEL_COPY_THREAD 0xCD
 
@@ -58,7 +57,7 @@ struct pygecko_bss_t {
 #define FS_BUFFER_SIZE 0x1000
 #define DATA_BUFFER_SIZE 0x5000
 #define DISASSEMBLER_BUFFER_SIZE 0x1024
-#define SERVER_VERSION "BWP 01/13/2017"
+#define SERVER_VERSION "01/13/2017"
 #define KERNEL_COPY_SOURCE_ADDRESS 0x10100000
 
 #define ASSERT_MINIMUM_HOLDS(actual, minimum, variableName) \
@@ -148,7 +147,7 @@ void runKernelCopyThread() {
 	int status = OSCreateThread(thread, kernelCopyThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0,
 								2 | 0x10 | 8);
 	ASSERT_INTEGER(status, 1, "Creating kernel copy thread")
-	OSSetThreadName(thread, "Kernel Copier");
+	// OSSetThreadName(thread, "Kernel Copier");
 	OSResumeThread(thread);
 }
 
@@ -301,7 +300,8 @@ int roundUpToAligned(int number) {
 
 void reportIllegalCommandByte(int commandByte) {
 	char errorBuffer[50];
-	__os_snprintf(errorBuffer, 50, "Illegal command byte received: %i\nServer Version: %s", commandByte, SERVER_VERSION);
+	__os_snprintf(errorBuffer, 50, "Illegal command byte received: %i\nServer Version: %s", commandByte,
+				  SERVER_VERSION);
 	OSFatal(errorBuffer);
 }
 
@@ -970,32 +970,48 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case COMMAND_SEARCH_32: {
-				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
-				CHECK_ERROR(ret < 0);
-				int addr = ((int *) buffer)[0];
-				int val = ((int *) buffer)[1];
-				int size = ((int *) buffer)[2];
-				int i;
-				int resaddr = 0;
-				for (i = addr; i < (addr + size); i += 4) {
-					if (*(int *) i == val) {
-						resaddr = i;
-						break;
+			case COMMAND_MEMORY_SEARCH: {
+				// Receive the initial data
+				ret = recvwait(bss, clientfd, buffer, 4 * 5);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (memory search information)")
+				int startingAddress = ((int *) buffer)[0];
+				int length = ((int *) buffer)[1];
+				int resultsLimit = ((int *) buffer)[2];
+				int aligned = ((int *) buffer)[3];
+				int searchBytesCount = ((int *) buffer)[4];
+
+				// Receive the search bytes
+				char searchBytes[searchBytesCount];
+				ret = recvwait(bss, clientfd, searchBytes, searchBytesCount);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (memory search bytes)")
+
+				int iterationIncrement = aligned ? searchBytesCount : 1;
+				int searchBytesOccurrences = 0;
+
+				// Perform the bytes search and collect the results
+				for (int currentAddress = startingAddress;
+					 currentAddress < startingAddress + length;
+					 currentAddress += iterationIncrement) {
+					if (memcmp((void *) currentAddress, searchBytes, searchBytesCount) == 0) {
+						// Search bytes have been found
+						((int *) buffer)[1 + searchBytesOccurrences] = currentAddress;
+						searchBytesOccurrences++;
+
+						if ((resultsLimit == searchBytesOccurrences)
+							|| (searchBytesOccurrences == ((DATA_BUFFER_SIZE / 4) - 1))) {
+							// We bail out
+							break;
+						}
 					}
 				}
-				((int *) buffer)[0] = resaddr;
-				ret = sendwait(bss, clientfd, buffer, 4);
-				CHECK_ERROR(ret < 0)
+
+				((int *) buffer)[0] = searchBytesOccurrences * 4;
+				ret = sendwait(bss, clientfd, buffer, 4 + (searchBytesOccurrences * 4));
+				ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (Sending search bytes occurrences)")
 
 				break;
 			}
-			case COMMAND_MEMORY_SEARCH: {
-				// TODO
-				break;
-			}
 			case COMMAND_SERVER_VERSION: {
-				// TODO Test this
 				char versionBuffer[50];
 				strcpy(versionBuffer, SERVER_VERSION);
 				int versionLength = strlen(versionBuffer);
@@ -1114,6 +1130,6 @@ void start_pygecko() {
 
 	int status = OSCreateThread(thread, CCThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0, 2 | 0x10 | 8);
 	ASSERT_INTEGER(status, 1, "Creating TCP Gecko thread")
-	OSSetThreadName(thread, "TCP Gecko");
+	// OSSetThreadName(thread, "TCP Gecko");
 	OSResumeThread(thread);
 }
