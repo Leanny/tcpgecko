@@ -31,6 +31,7 @@
 extern "C" {
 #endif
 
+/* Disassembler */
 typedef void (*DisasmReport)(char *outputBuffer, ...);
 
 typedef void *(*DisasmGetSym)(u32 addr, u8 *symbolName, u32 nameBufSize);
@@ -129,7 +130,7 @@ extern int (*OSSleepThread)(void *thread);
 
 extern int (*OSWakeupThread)(void *thread);
 
-extern int (*OSSetThreadName)(void *thread, const char *name);
+extern void (*OSSetThreadName)(void *thread, const char *name);
 
 extern int (*OSSuspendThread)(void *thread);
 

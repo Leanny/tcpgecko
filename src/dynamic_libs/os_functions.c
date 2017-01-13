@@ -64,7 +64,7 @@ EXPORT_DECL(int, OSWakeupThread, void *thread);
 
 EXPORT_DECL(int, OSYieldThread, void);
 
-EXPORT_DECL(int, OSSetThreadName, void *thread, const char *name);
+EXPORT_DECL(void, OSSetThreadName, void *thread, const char *name);
 
 EXPORT_DECL(int, OSSuspendThread, void *thread);
 

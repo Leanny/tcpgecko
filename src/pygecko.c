@@ -12,16 +12,44 @@
 #include "dynamic_libs/fs_functions.h"
 #include "common/fs_defs.h"
 #include "system/exception_handler.h"
-// #include <zlib.h>
+// #include <zlib.h> // TODO Fix this include
 
 void *client;
 void *commandBlock;
+bool kernelCopyThreadStarted;
 
 struct pygecko_bss_t {
 	int error, line;
 	void *thread;
 	unsigned char stack[0x6F00];
 };
+
+/* TCP Gecko Commands */
+#define COMMAND_READ_MEMORY 0x04
+#define COMMAND_VALIDATE_ADDRESS_RANGE 0x06
+#define COMMAND_DISASSEMBLE_RANGE 0x07 // TODO Remove either this disassembler or the other depending on which one is better
+#define COMMAND_MEMORY_DISASSEMBLE 0x08
+#define COMMAND_READ_MEMORY_COMPRESSED 0x09 // TODO Remove command when done and integrate in read memory
+#define COMMAND_KERNEL_WRITE 0x0B
+#define COMMAND_KERNEL_READ 0x0C
+#define COMMAND_TAKE_SCREEN_SHOT 0x0D // TODO Finish this
+#define COMMAND_UPLOAD_MEMORY 0x41
+#define COMMAND_GET_DATA_BUFFER_SIZE 0x51
+#define COMMAND_READ_FILE 0x52
+#define COMMAND_READ_DIRECTORY 0x53
+#define COMMAND_REPLACE_FILE 0x54 // TODO Test this
+#define COMMAND_GET_CODE_HANDLER_ADDRESS 0x55
+#define COMMAND_READ_THREADS 0x56
+#define COMMAND_GET_PERSISTENT_ID 0x57 // TODO Finish this
+#define COMMAND_WRITE_SCREEN 0x58 // TODO Finish this
+#define COMMAND_FOLLOW_POINTER 0x60
+#define COMMAND_RPC 0x70
+#define COMMAND_GET_SYMBOL 0x71
+#define COMMAND_SEARCH_32 0x72 // TODO Remove when below is done
+#define COMMAND_MEMORY_SEARCH 0x73 // TODO Implement this
+#define COMMAND_SERVER_VERSION 0x99 // TODO Test this
+#define COMMAND_OS_VERSION 0x9A
+#define COMMAND_RUN_KERNEL_COPY_THREAD 0xCD
 
 #define CHECK_ERROR(cond) if (cond) { bss->line = __LINE__; goto error; }
 #define errno (*__gh_errno_ptr())
@@ -30,6 +58,8 @@ struct pygecko_bss_t {
 #define FS_BUFFER_SIZE 0x1000
 #define DATA_BUFFER_SIZE 0x5000
 #define DISASSEMBLER_BUFFER_SIZE 0x1024
+#define SERVER_VERSION "BWP 01/13/2017"
+#define KERNEL_COPY_SOURCE_ADDRESS 0x10100000
 
 #define ASSERT_MINIMUM_HOLDS(actual, minimum, variableName) \
 if(actual < minimum) { \
@@ -80,12 +110,6 @@ if(actual > maximum) { \
         OSFatal(buffer); \
     } \
 
-
-/*Validates the address range (last address inclusive) but is SLOW on bigger ranges */
-static int validateAddressRange(int starting_address, int ending_address) {
-	return __OSValidateAddressSpaceRange(1, (void *) starting_address, ending_address - starting_address + 1);
-}
-
 unsigned char *memcpy_buffer[DATA_BUFFER_SIZE];
 
 void pygecko_memcpy(unsigned char *destinationBuffer, unsigned char *sourceBuffer, unsigned int length) {
@@ -93,6 +117,44 @@ void pygecko_memcpy(unsigned char *destinationBuffer, unsigned char *sourceBuffe
 	SC0x25_KernelCopyData((unsigned int) OSEffectiveToPhysical(destinationBuffer), (unsigned int) &memcpy_buffer,
 						  length);
 	DCFlushRange(destinationBuffer, (u32) length);
+}
+
+int kernelCopyThread(int argc, void *argv) {
+	int *sourceAddress = (int *) KERNEL_COPY_SOURCE_ADDRESS;
+
+	while (true) {
+		// Read the destination address from the source address
+		void *destinationAddress = (void *) *(sourceAddress);
+
+		// Avoid crashing
+		if (OSIsAddressValid(destinationAddress)) {
+			// Perform memory copy
+			unsigned int length = 4;
+			pygecko_memcpy((unsigned char *) destinationAddress, (unsigned char *) (sourceAddress + 4), length);
+		}
+
+		// Slow down the loop
+		sleep(1);
+	}
+}
+
+void runKernelCopyThread() {
+	unsigned int stack = (unsigned int) memalign(0x40, 0x100);
+	ASSERT_ALLOCATED(stack, "Kernel copy thread stack")
+	stack += 0x100;
+	void *thread = memalign(0x40, 0x1000);
+	ASSERT_ALLOCATED(thread, "Kernel copy thread")
+
+	int status = OSCreateThread(thread, kernelCopyThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0,
+								2 | 0x10 | 8);
+	ASSERT_INTEGER(status, 1, "Creating kernel copy thread")
+	OSSetThreadName(thread, "Kernel Copier");
+	OSResumeThread(thread);
+}
+
+/*Validates the address range (last address inclusive) but is SLOW on bigger ranges */
+static int validateAddressRange(int starting_address, int ending_address) {
+	return __OSValidateAddressSpaceRange(1, (void *) starting_address, ending_address - starting_address + 1);
 }
 
 static int recvwait(struct pygecko_bss_t *bss, int sock, void *buffer, int len) {
@@ -158,7 +220,10 @@ void writeScreen(const char *message) {
 	}
 }
 
-void receiveString(struct pygecko_bss_t *bss, int clientfd, char *stringBuffer, int bufferSize) {
+void receiveString(struct pygecko_bss_t *bss,
+				   int clientfd,
+				   char *stringBuffer,
+				   int bufferSize) {
 	// Receive the string length
 	char buffer[4] = {0};
 	int ret = recvwait(bss, clientfd, buffer, 4);
@@ -234,6 +299,12 @@ int roundUpToAligned(int number) {
 	return (number + 3) & ~0x03;
 }
 
+void reportIllegalCommandByte(int commandByte) {
+	char errorBuffer[50];
+	__os_snprintf(errorBuffer, 50, "Illegal command byte received: %i\nServer Version: %s", commandByte, SERVER_VERSION);
+	OSFatal(errorBuffer);
+}
+
 static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	int ret;
 
@@ -241,7 +312,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 	unsigned char buffer[1 + DATA_BUFFER_SIZE];
 
 	// Run the RPC server
-	while (1) {
+	while (true) {
 		ret = checkbyte(clientfd);
 
 		if (ret < 0) {
@@ -251,37 +322,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 		}
 
 		switch (ret) {
-			case 0x01: { /* cmd_poke08 */
-				char *ptr;
-				ret = recvwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0);
-
-				ptr = ((char **) buffer)[0];
-				*ptr = buffer[7];
-				DCFlushRange(ptr, 1);
-				break;
-			}
-			case 0x02: { /* cmd_poke16 */
-				short *ptr;
-				ret = recvwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0);
-
-				ptr = ((short **) buffer)[0];
-				*ptr = ((short *) buffer)[3];
-				DCFlushRange(ptr, 2);
-				break;
-			}
-			case 0x03: { /* cmd_pokemem */
-				int destination_address, value;
-				ret = recvwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0);
-
-				destination_address = ((int *) buffer)[0];
-				value = ((int *) buffer)[1];
-				pygecko_memcpy((unsigned char *) destination_address, (unsigned char *) &value, 4);
-				break;
-			}
-			case 0x04: { /* cmd_readmem */
+			case COMMAND_READ_MEMORY: {
 				const unsigned char *startingAddress, *endingAddress;
 				ret = recvwait(bss, clientfd, buffer, 8);
 				CHECK_ERROR(ret < 0)
@@ -324,36 +365,20 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				}
 				break;
 			}
-			case 0x05: { /* cmd_validate_address */
-
-				// Receive the address
-				ret = recvwait(bss, clientfd, buffer, 4);
-				CHECK_ERROR(ret < 0);
-
-				// Make the address pointer
-				void *address_pointer = ((void **) buffer)[0];
-
-				// Validate
-				int is_address_valid = OSIsAddressValid(address_pointer);
-
-				// Send the result
-				sendbyte(bss, clientfd, (unsigned char) is_address_valid);
-				break;
-			}
-			case 0x06: { /* cmd_validate_address_range */
+			case COMMAND_VALIDATE_ADDRESS_RANGE: {
 				ret = recvwait(bss, clientfd, buffer, 8);
 				CHECK_ERROR(ret < 0)
 
 				// Retrieve the data
-				int starting_address = ((int *) buffer)[0];
-				int ending_address = ((int *) buffer)[1];
+				int startingAddress = ((int *) buffer)[0];
+				int endingAddress = ((int *) buffer)[1];
 
-				int is_address_range_valid = validateAddressRange(starting_address, ending_address);
+				int isAddressRangeValid = validateAddressRange(startingAddress, endingAddress);
 
-				sendbyte(bss, clientfd, (unsigned char) is_address_range_valid);
+				sendbyte(bss, clientfd, (unsigned char) isAddressRangeValid);
 				break;
 			}
-			case 0x07: { /* cmd_disassemble_range */
+			case COMMAND_DISASSEMBLE_RANGE: {
 				// Receive the starting, ending address and the disassembler options
 				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
 				CHECK_ERROR(ret < 0)
@@ -379,7 +404,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x08: { /* cmd_memory_disassemble */
+			case COMMAND_MEMORY_DISASSEMBLE: {
 				// Receive the starting address, ending address and disassembler options
 				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
 				CHECK_ERROR(ret < 0)
@@ -435,7 +460,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x09: { /* read_memory_compressed */
+			case COMMAND_READ_MEMORY_COMPRESSED: { /* read_memory_compressed */
 				/*// Receive the starting address and length
 				ret = recvwait(bss, clientfd, buffer, 4 + 4);
 				CHECK_ERROR(ret < 0)
@@ -522,7 +547,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;*/
 			}
-			case 0x0b: { /* cmd_writekern */
+			case COMMAND_KERNEL_WRITE: {
 				void *ptr, *value;
 				ret = recvwait(bss, clientfd, buffer, 8);
 				CHECK_ERROR(ret < 0)
@@ -533,7 +558,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				kern_write(ptr, (uint32_t) value);
 				break;
 			}
-			case 0x0c: { /* cmd_readkern */
+			case COMMAND_KERNEL_READ: {
 				void *ptr, *value;
 				ret = recvwait(bss, clientfd, buffer, 4);
 				CHECK_ERROR(ret < 0);
@@ -546,7 +571,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				sendwait(bss, clientfd, buffer, 4);
 				break;
 			}
-			case 0x0D: { /* cmd_take_screenshot */
+			case COMMAND_TAKE_SCREEN_SHOT: {
 				GX2ColorBuffer colorBuffer;
 				// TODO Initialize colorBuffer!
 				GX2Surface surface = colorBuffer.surface;
@@ -576,10 +601,10 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x41: { /* cmd_upload */
+			case COMMAND_UPLOAD_MEMORY: {
 				// Receive the starting and ending addresses
 				ret = recvwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
 				unsigned char *current_address = ((unsigned char **) buffer)[0];
 				unsigned char *end_address = ((unsigned char **) buffer)[1];
 
@@ -598,21 +623,16 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 					current_address += length;
 				}
 
-				sendbyte(bss, clientfd, 0xaa); /* GCACK */
 				break;
 			}
-			case 0x50: { /* cmd_status */
-				ret = sendbyte(bss, clientfd, 1); /* running */
-				CHECK_ERROR(ret < 0);
-				break;
-			}
-			case 0x51: { /* cmd_data_buffer_size */
+			case COMMAND_GET_DATA_BUFFER_SIZE: {
 				((int *) buffer)[0] = DATA_BUFFER_SIZE;
 				ret = sendwait(bss, clientfd, buffer, 4);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
+
 				break;
 			}
-			case 0x52: { /* cmd_read_file */
+			case COMMAND_READ_FILE: {
 				char file_path[FS_MAX_FULLPATH_SIZE] = {0};
 				receiveString(bss, clientfd, file_path, FS_MAX_FULLPATH_SIZE);
 
@@ -669,7 +689,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x53: { /* cmd_read_directory */
+			case COMMAND_READ_DIRECTORY: {
 				char directory_path[FS_MAX_FULLPATH_SIZE] = {0};
 				receiveString(bss, clientfd, directory_path, FS_MAX_FULLPATH_SIZE);
 
@@ -717,7 +737,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x54: { /* cmd_replace_file */
+			case COMMAND_REPLACE_FILE: {
 				// TODO Write file
 
 				// Receive the file path
@@ -790,14 +810,14 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x55: { /* cmd_code_handler_install_address */
+			case COMMAND_GET_CODE_HANDLER_ADDRESS: {
 				((int *) buffer)[0] = CODE_HANDLER_INSTALL_ADDRESS;
 				ret = sendwait(bss, clientfd, buffer, 4);
 				CHECK_ERROR(ret < 0)
 
 				break;
 			}
-			case 0x56: { /* read_threads */
+			case COMMAND_READ_THREADS: {
 				int OS_THREAD_SIZE = 0x6A0;
 
 				int currentThreadAddress = OSGetCurrentThread();
@@ -838,7 +858,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x57 : {
+			case COMMAND_GET_PERSISTENT_ID : {
 				// TODO Get persistent ID
 				/*else if (cmd == 17) { //Get persistent id
 				a->nn_act_Initialize();
@@ -849,12 +869,12 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 			}*/
 				break;
 			}
-			case 0x58: {
+			case COMMAND_WRITE_SCREEN: {
 				// TODO Write screen
 
 				break;
 			}
-			case 0x60: { /* cmd_follow_pointer */
+			case COMMAND_FOLLOW_POINTER: {
 				ret = recvwait(bss, clientfd, buffer, 8);
 				ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (Pointer address and offsets count)")
 
@@ -900,7 +920,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x70: { /* cmd_rpc */
+			case COMMAND_RPC: {
 				long long (*fun)(int, int, int, int, int, int, int, int);
 				int r3, r4, r5, r6, r7, r8, r9, r10;
 				long long result;
@@ -926,12 +946,12 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x71: { /* cmd_getsymbol */
+			case COMMAND_GET_SYMBOL: {
 				int size = recvbyte(bss, clientfd);
-				CHECK_ERROR(size < 0);
+				CHECK_ERROR(size < 0)
 
 				ret = recvwait(bss, clientfd, buffer, size);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
 
 				/* Identify the RPL name and symbol name */
 				char *rplname = (char *) &((int *) buffer)[2];
@@ -950,8 +970,8 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x72: { /* cmd_search32 */
-				ret = recvwait(bss, clientfd, buffer, 12);
+			case COMMAND_SEARCH_32: {
+				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
 				CHECK_ERROR(ret < 0);
 				int addr = ((int *) buffer)[0];
 				int val = ((int *) buffer)[1];
@@ -970,58 +990,39 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case 0x80: { /* cmd_rpc_big */
-				long long (*fun)(int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int);
-				int r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, r16, r17, r18;
-				long long result;
+			case COMMAND_MEMORY_SEARCH: {
+				// TODO
+				break;
+			}
+			case COMMAND_SERVER_VERSION: {
+				// TODO Test this
+				char versionBuffer[50];
+				strcpy(versionBuffer, SERVER_VERSION);
+				int versionLength = strlen(versionBuffer);
+				((int *) buffer)[0] = versionLength;
+				memcpy(buffer + 4, versionBuffer, versionLength);
 
-				ret = recvwait(bss, clientfd, buffer, 4 + 16 * 4);
-				CHECK_ERROR(ret < 0);
-
-				fun = ((void **) buffer)[0];
-				r3 = ((int *) buffer)[1];
-				r4 = ((int *) buffer)[2];
-				r5 = ((int *) buffer)[3];
-				r6 = ((int *) buffer)[4];
-				r7 = ((int *) buffer)[5];
-				r8 = ((int *) buffer)[6];
-				r9 = ((int *) buffer)[7];
-				r10 = ((int *) buffer)[8];
-				r11 = ((int *) buffer)[9];
-				r12 = ((int *) buffer)[10];
-				r13 = ((int *) buffer)[11];
-				r14 = ((int *) buffer)[12];
-				r15 = ((int *) buffer)[13];
-				r16 = ((int *) buffer)[14];
-				r17 = ((int *) buffer)[15];
-				r18 = ((int *) buffer)[16];
-
-				result = fun(r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, r16, r17, r18);
-
-				((long long *) buffer)[0] = result;
-				ret = sendwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0)
+				// Send the length and the version string
+				ret = sendwait(bss, clientfd, buffer, 4 + versionLength);
+				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (server version)");
 
 				break;
 			}
-			case 0x99: { /* cmd_version */
-				ret = sendbyte(bss, clientfd, 0x82); /* WiiU */
-				CHECK_ERROR(ret < 0);
-				break;
-			}
-			case 0x9A: { /* cmd_os_version */
+			case COMMAND_OS_VERSION: {
 				((int *) buffer)[0] = (int) OS_FIRMWARE;
 				ret = sendwait(bss, clientfd, buffer, 4);
 				CHECK_ERROR(ret < 0)
 
 				break;
 			}
-			case 0xcc: { /* GCFAIL */
-				break;
+			case COMMAND_RUN_KERNEL_COPY_THREAD: {
+				if (!kernelCopyThreadStarted) {
+					kernelCopyThreadStarted = true;
+					runKernelCopyThread();
+				}
 			}
 			default:
-				ret = -1;
-				CHECK_ERROR(0)
+				reportIllegalCommandByte(ret);
 
 				break;
 		}
@@ -1104,17 +1105,15 @@ static int CCThread(int argc, void *argv) {
 	return 0;
 }
 
-void start_pygecko(void) {
+void start_pygecko() {
 	unsigned int stack = (unsigned int) memalign(0x40, 0x100);
+	ASSERT_ALLOCATED(stack, "TCP Gecko stack")
 	stack += 0x100;
-
-	// Create the thread
 	void *thread = memalign(0x40, 0x1000);
+	ASSERT_ALLOCATED(thread, "TCP Gecko thread")
 
-	if (OSCreateThread(thread, CCThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0, 2 | 0x10 | 8) ==
-		1) {
-		OSResumeThread(thread);
-	} else {
-		free(thread);
-	}
+	int status = OSCreateThread(thread, CCThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0, 2 | 0x10 | 8);
+	ASSERT_INTEGER(status, 1, "Creating TCP Gecko thread")
+	OSSetThreadName(thread, "TCP Gecko");
+	OSResumeThread(thread);
 }
