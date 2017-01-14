@@ -25,6 +25,9 @@ struct pygecko_bss_t {
 };
 
 /* TCP Gecko Commands */
+#define COMMAND_WRITE_8 0x01
+#define COMMAND_WRITE_16 0x02
+#define COMMAND_WRITE_32 0x03
 #define COMMAND_READ_MEMORY 0x04
 #define COMMAND_VALIDATE_ADDRESS_RANGE 0x06
 // #define COMMAND_DISASSEMBLE_RANGE 0x07 // TODO Remove either this disassembler or the other depending on which one is better
@@ -329,6 +332,36 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 		}
 
 		switch (ret) {
+			case COMMAND_WRITE_8: { /* cmd_poke08 */
+				char *ptr;
+				ret = recvwait(bss, clientfd, buffer, 8);
+				CHECK_ERROR(ret < 0);
+
+				ptr = ((char **)buffer)[0];
+				*ptr = buffer[7];
+				DCFlushRange(ptr, 1);
+				break;
+			}
+			case COMMAND_WRITE_16: { /* cmd_poke16 */
+				short *ptr;
+				ret = recvwait(bss, clientfd, buffer, 8);
+				CHECK_ERROR(ret < 0);
+
+				ptr = ((short **)buffer)[0];
+				*ptr = ((short *)buffer)[3];
+				DCFlushRange(ptr, 2);
+				break;
+			}
+			case COMMAND_WRITE_32: { /* cmd_pokemem */
+				int dst, value;
+				ret = recvwait(bss, clientfd, buffer, 8);
+				CHECK_ERROR(ret < 0);
+
+				dst = ((int *)buffer)[0];
+				value = ((int *)buffer)[1];
+				pygecko_memcpy((unsigned char*)dst, (unsigned char*)&value, 4);
+				break;
+			}
 			case COMMAND_READ_MEMORY: {
 				const unsigned char *startingAddress, *endingAddress;
 				ret = recvwait(bss, clientfd, buffer, 8);
