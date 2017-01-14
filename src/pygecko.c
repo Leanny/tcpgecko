@@ -44,7 +44,7 @@ struct pygecko_bss_t {
 #define COMMAND_REPLACE_FILE 0x54 // TODO Test this
 #define COMMAND_GET_CODE_HANDLER_ADDRESS 0x55
 #define COMMAND_READ_THREADS 0x56
-#define COMMAND_ACCOUNT_IDENTIFIER 0x57 // TODO Finish this
+#define COMMAND_ACCOUNT_IDENTIFIER 0x57
 #define COMMAND_WRITE_SCREEN 0x58 // TODO Exception DSI
 #define COMMAND_FOLLOW_POINTER 0x60
 #define COMMAND_RPC 0x70
@@ -62,7 +62,6 @@ struct pygecko_bss_t {
 #define DATA_BUFFER_SIZE 0x5000
 #define DISASSEMBLER_BUFFER_SIZE 0x1024
 #define SERVER_VERSION "01/13/2017"
-#define KERNEL_COPY_SOURCE_ADDRESS 0x10100000
 
 #define ASSERT_MINIMUM_HOLDS(actual, minimum, variableName) \
 if(actual < minimum) { \
@@ -122,22 +121,28 @@ void pygecko_memcpy(unsigned char *destinationBuffer, unsigned char *sourceBuffe
 	DCFlushRange(destinationBuffer, (u32) length);
 }
 
-int kernelCopyThread(int argc, void *argv) {
-	int *sourceAddress = (int *) KERNEL_COPY_SOURCE_ADDRESS;
+unsigned char *kernelCopyBuffer[4];
 
+void kernelCopy(unsigned char *destinationBuffer, unsigned char *sourceBuffer, unsigned int length) {
+	memcpy(kernelCopyBuffer, sourceBuffer, length);
+	unsigned int destinationAddress = (unsigned int) OSEffectiveToPhysical(destinationBuffer);
+	SC0x25_KernelCopyData(destinationAddress, (unsigned int) &kernelCopyBuffer, length);
+	DCFlushRange(destinationBuffer, (u32) length);
+}
+
+#define KERNEL_COPY_SOURCE_ADDRESS 0x10100000
+
+int kernelCopyThread(int argc, void *argv) {
 	while (true) {
 		// Read the destination address from the source address
-		void *destinationAddress = (void *) *(sourceAddress);
+		int destinationAddress = *(int *) KERNEL_COPY_SOURCE_ADDRESS;
 
 		// Avoid crashing
-		if (OSIsAddressValid(destinationAddress)) {
+		if (OSIsAddressValid((const void *) destinationAddress)) {
 			// Perform memory copy
-			unsigned int length = 4;
-			pygecko_memcpy((unsigned char *) destinationAddress, (unsigned char *) (sourceAddress + 4), length);
+			unsigned char *valueBuffer = (unsigned char *) (KERNEL_COPY_SOURCE_ADDRESS + 4);
+			kernelCopy((unsigned char *) destinationAddress, valueBuffer, 4);
 		}
-
-		// Slow down the loop
-		sleep(1);
 	}
 }
 
@@ -148,7 +153,7 @@ void startKernelCopyThread() {
 	void *thread = memalign(0x40, 0x1000);
 	ASSERT_ALLOCATED(thread, "Kernel copy thread")
 
-	int status = OSCreateThread(thread, kernelCopyThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 0,
+	int status = OSCreateThread(thread, kernelCopyThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 25,
 								OS_THREAD_ATTR_AFFINITY_CORE1 | OS_THREAD_ATTR_PINNED_AFFINITY | OS_THREAD_ATTR_DETACH);
 	ASSERT_INTEGER(status, 1, "Creating kernel copy thread")
 	// OSSetThreadName(thread, "Kernel Copier");
@@ -303,11 +308,12 @@ int roundUpToAligned(int number) {
 	return (number + 3) & ~0x03;
 }
 
+#define ERROR_BUFFER_SIZE 100
+
 void reportIllegalCommandByte(int commandByte) {
-	char errorBuffer[50];
-	// TODO Broken string reference, turns out empty
-	__os_snprintf(errorBuffer, 50, "Illegal command byte received: %i\nServer Version: %s", commandByte,
-				  SERVER_VERSION);
+	char errorBuffer[ERROR_BUFFER_SIZE];
+	__os_snprintf(errorBuffer, ERROR_BUFFER_SIZE, "Illegal command byte received: 0x%02x\nServer Version: %s",
+				  commandByte, SERVER_VERSION);
 	OSFatal(errorBuffer);
 }
 
@@ -332,34 +338,35 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 		}
 
 		switch (ret) {
-			case COMMAND_WRITE_8: { /* cmd_poke08 */
-				char *ptr;
+			case COMMAND_WRITE_8: {
+				char *destinationAddress;
 				ret = recvwait(bss, clientfd, buffer, 8);
 				CHECK_ERROR(ret < 0);
 
-				ptr = ((char **)buffer)[0];
-				*ptr = buffer[7];
-				DCFlushRange(ptr, 1);
+				destinationAddress = ((char **) buffer)[0];
+				*destinationAddress = buffer[7];
+				DCFlushRange(destinationAddress, 1);
 				break;
 			}
-			case COMMAND_WRITE_16: { /* cmd_poke16 */
-				short *ptr;
+			case COMMAND_WRITE_16: {
+				short *destinationAddress;
 				ret = recvwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
 
-				ptr = ((short **)buffer)[0];
-				*ptr = ((short *)buffer)[3];
-				DCFlushRange(ptr, 2);
+				destinationAddress = ((short **) buffer)[0];
+				*destinationAddress = ((short *) buffer)[3];
+				DCFlushRange(destinationAddress, 2);
 				break;
 			}
-			case COMMAND_WRITE_32: { /* cmd_pokemem */
-				int dst, value;
+			case COMMAND_WRITE_32: {
+				int destinationAddress, value;
 				ret = recvwait(bss, clientfd, buffer, 8);
-				CHECK_ERROR(ret < 0);
+				CHECK_ERROR(ret < 0)
 
-				dst = ((int *)buffer)[0];
-				value = ((int *)buffer)[1];
-				pygecko_memcpy((unsigned char*)dst, (unsigned char*)&value, 4);
+				destinationAddress = ((int *) buffer)[0];
+				value = ((int *) buffer)[1];
+
+				pygecko_memcpy((unsigned char *) destinationAddress, (unsigned char *) &value, 4);
 				break;
 			}
 			case COMMAND_READ_MEMORY: {
@@ -418,32 +425,32 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				sendbyte(bss, clientfd, (unsigned char) isAddressRangeValid);
 				break;
 			}
-			/*case COMMAND_DISASSEMBLE_RANGE: {
-				// Receive the starting, ending address and the disassembler options
-				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
-				CHECK_ERROR(ret < 0)
-				void *startingAddress = ((void **) buffer)[0];
-				void *endingAddress = ((void **) buffer)[1];
-				int disassemblerOptions = ((int *) buffer)[2];
+				/*case COMMAND_DISASSEMBLE_RANGE: {
+					// Receive the starting, ending address and the disassembler options
+					ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
+					CHECK_ERROR(ret < 0)
+					void *startingAddress = ((void **) buffer)[0];
+					void *endingAddress = ((void **) buffer)[1];
+					int disassemblerOptions = ((int *) buffer)[2];
 
-				// Disassemble
-				DisassemblePPCRange(startingAddress, endingAddress, formatDisassembled, OSGetSymbolName,
-									(u32) disassemblerOptions);
+					// Disassemble
+					DisassemblePPCRange(startingAddress, endingAddress, formatDisassembled, OSGetSymbolName,
+										(u32) disassemblerOptions);
 
-				// Send the disassembler buffer size
-				int length = DISASSEMBLER_BUFFER_SIZE;
-				ret = sendwait(bss, clientfd, &length, 4);
-				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (disassembler buffer size)")
+					// Send the disassembler buffer size
+					int length = DISASSEMBLER_BUFFER_SIZE;
+					ret = sendwait(bss, clientfd, &length, 4);
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (disassembler buffer size)")
 
-				// Send the data
-				ret = sendwait(bss, clientfd, disassemblerBufferPointer, length);
-				ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (disassembler buffer)")
+					// Send the data
+					ret = sendwait(bss, clientfd, disassemblerBufferPointer, length);
+					ASSERT_FUNCTION_SUCCEEDED(ret, "sendwait (disassembler buffer)")
 
-				// Place the pointer back to the beginning
-				disassemblerBuffer = (char *) disassemblerBufferPointer;
+					// Place the pointer back to the beginning
+					disassemblerBuffer = (char *) disassemblerBufferPointer;
 
-				break;
-			}*/
+					break;
+				}*/
 			case COMMAND_MEMORY_DISASSEMBLE: {
 				// Receive the starting address, ending address and disassembler options
 				ret = recvwait(bss, clientfd, buffer, 4 + 4 + 4);
@@ -1109,7 +1116,6 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				break;
 			}
 			case COMMAND_RUN_KERNEL_COPY_THREAD: {
-				// TODO Nothing happens?
 				if (!kernelCopyThreadStarted) {
 					kernelCopyThreadStarted = true;
 					startKernelCopyThread();
