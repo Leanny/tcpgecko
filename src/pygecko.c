@@ -34,6 +34,7 @@ struct pygecko_bss_t {
 #define COMMAND_KERNEL_READ 0x0C
 #define COMMAND_TAKE_SCREEN_SHOT 0x0D // TODO Finish this
 #define COMMAND_UPLOAD_MEMORY 0x41
+#define COMMAND_SERVER_STATUS 0x50
 #define COMMAND_GET_DATA_BUFFER_SIZE 0x51
 #define COMMAND_READ_FILE 0x52
 #define COMMAND_READ_DIRECTORY 0x53
@@ -301,9 +302,14 @@ int roundUpToAligned(int number) {
 
 void reportIllegalCommandByte(int commandByte) {
 	char errorBuffer[50];
+	// TODO Broken string reference, turns out empty
 	__os_snprintf(errorBuffer, 50, "Illegal command byte received: %i\nServer Version: %s", commandByte,
 				  SERVER_VERSION);
 	OSFatal(errorBuffer);
+}
+
+void writeInt(unsigned int address, unsigned int value) {
+	pygecko_memcpy((unsigned char *) address, (unsigned char *) &value, 4);
 }
 
 static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
@@ -953,6 +959,11 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
+			case COMMAND_SERVER_STATUS: {
+				ret = sendbyte(bss, clientfd, 1);
+				CHECK_ERROR(ret < 0)
+				break;
+			}
 			case COMMAND_RPC: {
 				long long (*fun)(int, int, int, int, int, int, int, int);
 				int r3, r4, r5, r6, r7, r8, r9, r10;
@@ -1158,6 +1169,9 @@ static int CCThread(int argc, void *argv) {
 }
 
 void start_pygecko() {
+	// Force the debugger to be initialized by default
+	// writeInt((unsigned int) (OSIsDebuggerInitialized + 0x1C), 0x38000001); // li r3, 1
+
 	unsigned int stack = (unsigned int) memalign(0x40, 0x100);
 	ASSERT_ALLOCATED(stack, "TCP Gecko stack")
 	stack += 0x100;

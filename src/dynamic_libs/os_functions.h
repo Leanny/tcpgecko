@@ -231,6 +231,8 @@ extern bool
 
 extern void *(*OSGetSymbolName)(u32 addr, u8 *symbolName, u32 nameBufSize);
 
+extern int (*OSIsDebuggerInitialized)(void);
+
 // extern int (*compress2)(char *dest, int *destLen, const char *source, int sourceLen, int level);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------

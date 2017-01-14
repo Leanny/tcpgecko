@@ -149,6 +149,8 @@ EXPORT_DECL(bool, DisassemblePPCOpcode, u32 *, char *, u32, DisasmGetSym, u32);
 
 EXPORT_DECL(void*, OSGetSymbolName, u32, u8*, u32);
 
+EXPORT_DECL(int, OSIsDebuggerInitialized, void);
+
 // EXPORT_DECL(int, compress2, char *, int*, const char *, int, int);
 
 //!----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -248,6 +250,7 @@ void InitOSFunctionPointers(void) {
 	OS_FIND_EXPORT(coreinit_handle, DisassemblePPCRange);
 	OS_FIND_EXPORT(coreinit_handle, DisassemblePPCOpcode);
 	OS_FIND_EXPORT(coreinit_handle, OSGetSymbolName);
+	OS_FIND_EXPORT(coreinit_handle, OSIsDebuggerInitialized);
 	// OS_FIND_EXPORT(zlib_handle, compress2);
 
 	OSDynLoad_FindExport(coreinit_handle, 0, "_Exit", &__Exit);
