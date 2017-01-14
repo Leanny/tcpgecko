@@ -30,7 +30,6 @@ struct pygecko_bss_t {
 #define COMMAND_WRITE_32 0x03
 #define COMMAND_READ_MEMORY 0x04
 #define COMMAND_VALIDATE_ADDRESS_RANGE 0x06
-// #define COMMAND_DISASSEMBLE_RANGE 0x07 // TODO Remove either this disassembler or the other depending on which one is better
 #define COMMAND_MEMORY_DISASSEMBLE 0x08
 #define COMMAND_READ_MEMORY_COMPRESSED 0x09 // TODO Remove command when done and integrate in read memory
 #define COMMAND_KERNEL_WRITE 0x0B
@@ -61,7 +60,7 @@ struct pygecko_bss_t {
 #define FS_BUFFER_SIZE 0x1000
 #define DATA_BUFFER_SIZE 0x5000
 #define DISASSEMBLER_BUFFER_SIZE 0x1024
-#define SERVER_VERSION "01/13/2017"
+#define SERVER_VERSION "01/14/2017"
 
 #define ASSERT_MINIMUM_HOLDS(actual, minimum, variableName) \
 if(actual < minimum) { \
@@ -220,13 +219,18 @@ static int sendbyte(struct pygecko_bss_t *bss, int sock, unsigned char byte) {
 	return sendwait(bss, sock, buffer, 1);
 }
 
-void writeScreen(const char *message) {
-	// Set the text for both buffers
-	for (unsigned int bufferIndex = 0; bufferIndex < 2; bufferIndex++) {
-		OSScreenClearBufferEx(bufferIndex, 0);
-		OSScreenPutFontEx(bufferIndex, 0, 0, message);
-		OSScreenFlipBuffersEx(bufferIndex);
-	}
+void writeScreen(char message[100], int secondsDelay) {
+	// TODO Crashes in games?
+	OSScreenClearBufferEx(0, 0);
+	OSScreenClearBufferEx(1, 0);
+
+	OSScreenPutFontEx(0, 14, 1, message);
+	OSScreenPutFontEx(1, 14, 1, message);
+
+	sleep(secondsDelay);
+
+	OSScreenFlipBuffersEx(0);
+	OSScreenFlipBuffersEx(1);
 }
 
 void receiveString(struct pygecko_bss_t *bss,
@@ -944,12 +948,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				ASSERT_FUNCTION_SUCCEEDED(ret, "recvwait (write screen seconds)")
 				int seconds = ((int *) buffer)[0];
 				receiveString(bss, clientfd, message, 100);
-				writeScreen(message);
-				usleep(seconds);
-
-				// Clear screen
-				OSScreenClearBufferEx(0, 0);
-				OSScreenClearBufferEx(1, 0);
+				writeScreen(message, seconds);
 
 				break;
 			}
