@@ -16,7 +16,7 @@
 
 void *client;
 void *commandBlock;
-bool kernelCopyThreadStarted;
+bool kernelCopyServiceStarted;
 
 struct pygecko_bss_t {
 	int error, line;
@@ -51,7 +51,7 @@ struct pygecko_bss_t {
 #define COMMAND_MEMORY_SEARCH 0x73
 #define COMMAND_SERVER_VERSION 0x99
 #define COMMAND_OS_VERSION 0x9A
-#define COMMAND_RUN_KERNEL_COPY_THREAD 0xCD
+#define COMMAND_RUN_KERNEL_COPY_SERVICE 0xCD
 
 #define CHECK_ERROR(cond) if (cond) { bss->line = __LINE__; goto error; }
 #define errno (*__gh_errno_ptr())
@@ -131,7 +131,7 @@ void kernelCopy(unsigned char *destinationBuffer, unsigned char *sourceBuffer, u
 
 #define KERNEL_COPY_SOURCE_ADDRESS 0x10100000
 
-int kernelCopyThread(int argc, void *argv) {
+int kernelCopyService(int argc, void *argv) {
 	while (true) {
 		// Read the destination address from the source address
 		int destinationAddress = *(int *) KERNEL_COPY_SOURCE_ADDRESS;
@@ -141,18 +141,22 @@ int kernelCopyThread(int argc, void *argv) {
 			// Perform memory copy
 			unsigned char *valueBuffer = (unsigned char *) (KERNEL_COPY_SOURCE_ADDRESS + 4);
 			kernelCopy((unsigned char *) destinationAddress, valueBuffer, 4);
+
+			// "Consume" address and value for synchronization with the code handler for instance
+			*(int *) KERNEL_COPY_SOURCE_ADDRESS = 0;
+			*(((int *) KERNEL_COPY_SOURCE_ADDRESS) + 1) = 0;
 		}
 	}
 }
 
-void startKernelCopyThread() {
+void startKernelCopyService() {
 	unsigned int stack = (unsigned int) memalign(0x40, 0x100);
 	ASSERT_ALLOCATED(stack, "Kernel copy thread stack")
 	stack += 0x100;
 	void *thread = memalign(0x40, 0x1000);
 	ASSERT_ALLOCATED(thread, "Kernel copy thread")
 
-	int status = OSCreateThread(thread, kernelCopyThread, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 25,
+	int status = OSCreateThread(thread, kernelCopyService, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 25,
 								OS_THREAD_ATTR_AFFINITY_CORE1 | OS_THREAD_ATTR_PINNED_AFFINITY | OS_THREAD_ATTR_DETACH);
 	ASSERT_INTEGER(status, 1, "Creating kernel copy thread")
 	// OSSetThreadName(thread, "Kernel Copier");
@@ -220,7 +224,7 @@ static int sendbyte(struct pygecko_bss_t *bss, int sock, unsigned char byte) {
 }
 
 void writeScreen(char message[100], int secondsDelay) {
-	// TODO Crashes in games?
+	// TODO Does nothing then crashes (in games)?
 	OSScreenClearBufferEx(0, 0);
 	OSScreenClearBufferEx(1, 0);
 
@@ -1114,10 +1118,10 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 				break;
 			}
-			case COMMAND_RUN_KERNEL_COPY_THREAD: {
-				if (!kernelCopyThreadStarted) {
-					kernelCopyThreadStarted = true;
-					startKernelCopyThread();
+			case COMMAND_RUN_KERNEL_COPY_SERVICE: {
+				if (!kernelCopyServiceStarted) {
+					kernelCopyServiceStarted = true;
+					startKernelCopyService();
 				}
 
 				break;
