@@ -156,7 +156,7 @@ void startKernelCopyService() {
 	void *thread = memalign(0x40, 0x1000);
 	ASSERT_ALLOCATED(thread, "Kernel copy thread")
 
-	int status = OSCreateThread(thread, kernelCopyService, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 25,
+	int status = OSCreateThread(thread, kernelCopyService, 1, NULL, (u32) stack + sizeof(stack), sizeof(stack), 31,
 								OS_THREAD_ATTR_AFFINITY_CORE1 | OS_THREAD_ATTR_PINNED_AFFINITY | OS_THREAD_ATTR_DETACH);
 	ASSERT_INTEGER(status, 1, "Creating kernel copy thread")
 	// OSSetThreadName(thread, "Kernel Copier");
