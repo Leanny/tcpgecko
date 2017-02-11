@@ -59,7 +59,7 @@ MAKEFLAGS += --no-print-directory
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project
 #---------------------------------------------------------------------------------
-LIBS	:=
+LIBS	:= -lz
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
@@ -67,7 +67,8 @@ LIBS	:=
 #---------------------------------------------------------------------------------
 LIBDIRS	:=	$(CURDIR)	\
 			$(DEVKITPPC)/lib  \
-			$(DEVKITPPC)/lib/gcc/powerpc-eabi/4.8.2
+			$(DEVKITPPC)/lib/gcc/powerpc-eabi/4.8.2  \
+			$(PORTLIBS)
 
 
 #---------------------------------------------------------------------------------

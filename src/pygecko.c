@@ -1,6 +1,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "zlib.h"
 #include "common/common.h"
 #include "dynamic_libs/os_functions.h"
 #include <string.h>
@@ -112,6 +113,10 @@ if(actual > maximum) { \
     } \
 
 unsigned char *memcpy_buffer[DATA_BUFFER_SIZE];
+
+ZEXTERN int ZEXPORT deflateEnd OF((z_streamp strm));
+ZEXTERN int ZEXPORT deflateInit OF((z_streamp strm, int level));
+ZEXTERN int ZEXPORT deflate OF((z_streamp strm, int flush));
 
 void pygecko_memcpy(unsigned char *destinationBuffer, unsigned char *sourceBuffer, unsigned int length) {
 	memcpy(memcpy_buffer, sourceBuffer, length);
@@ -334,6 +339,7 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 
 	// Hold the command and the data
 	unsigned char buffer[1 + DATA_BUFFER_SIZE];
+  unsigned char copyBuffer[1 + DATA_BUFFER_SIZE];
 
 	// Run the RPC server
 	while (true) {
@@ -384,6 +390,12 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 				startingAddress = ((const unsigned char **) buffer)[0];
 				endingAddress = ((const unsigned char **) buffer)[1];
 
+        // zlib struct
+        z_stream defstream;
+        defstream.zalloc = Z_NULL;
+        defstream.zfree = Z_NULL;
+        defstream.opaque = Z_NULL;
+        
 				while (startingAddress != endingAddress) {
 
 					int length = (int) (endingAddress - startingAddress);
@@ -391,23 +403,70 @@ static int rungecko(struct pygecko_bss_t *bss, int clientfd) {
 						length = DATA_BUFFER_SIZE;
 					}
 
-					// Figure out if all bytes are zero to possibly avoid sending them
-					int rangeIterationIndex = 0;
+					// Figure out if all bytes are the same to possibly avoid sending them
+          char cmpVal = startingAddress[0];
+					int rangeIterationIndex = 1;
 					for (; rangeIterationIndex < length; rangeIterationIndex++) {
-						if (startingAddress[rangeIterationIndex] != 0) {
+						if (startingAddress[rangeIterationIndex] != cmpVal) {
 							break;
 						}
 					}
 
 					if (rangeIterationIndex == length) {
-						// No need to send all zero bytes for performance
+						// No need to send all the same bytes for performance
 						ret = sendbyte(bss, clientfd, 0xB0);
 						CHECK_ERROR(ret < 0)
+            ret = sendbyte(bss, clientfd, cmpVal);
+					  CHECK_ERROR(ret < 0);
 					} else {
 						// TODO Compression of ptr, sending of status, compressed size and data, length: 1 + 4 + len(data)
-						buffer[0] = 0xBD;
-						memcpy(buffer + 1, startingAddress, length);
-						ret = sendwait(bss, clientfd, buffer, length + 1);
+						memcpy(buffer, startingAddress, length);
+            
+            // zlib struct init
+            defstream.avail_in = (uInt)length; // size of input, string
+            defstream.next_in = (Bytef *)buffer; // input char array
+            defstream.avail_out = (uInt)sizeof(copyBuffer); // size of output
+            defstream.next_out = (Bytef *)copyBuffer; // output char array
+            
+            // zlib stuff
+            deflateInit(&defstream, Z_BEST_COMPRESSION);
+            deflate(&defstream, Z_FINISH);
+            deflateEnd(&defstream);
+            
+            uLong size = defstream.total_out; // compressed size
+            if(size < length) {
+              // case: compression successful
+              // send unique byte
+              ret = sendbyte(bss, clientfd, 0xbe);
+              CHECK_ERROR(ret < 0);          
+              
+              // send size of compressed content
+              ret = sendbyte(bss, clientfd, (size&0xFFFF) >> 8);
+              CHECK_ERROR(ret < 0);     
+              ret = sendbyte(bss, clientfd, (size&0xFF));
+              CHECK_ERROR(ret < 0);
+              
+              // nr. of bytes that are sent
+              int len2 = (size&0xFFFF);
+                 
+              ret = sendwait(bss, clientfd, copyBuffer, len2);
+              CHECK_ERROR(ret < 0);
+            } else {
+              // compression results in larger size 
+              ret = sendbyte(bss, clientfd, 0xbd);
+              CHECK_ERROR(ret < 0);   
+
+              // the size can actully be checked by the client, as it should be either a full chunk or partial chunk
+              ret = sendbyte(bss, clientfd, (length&0xFFFF) >> 8);
+              CHECK_ERROR(ret < 0);     
+              ret = sendbyte(bss, clientfd, (length&0xFF));
+              CHECK_ERROR(ret < 0);
+               
+              ret = sendwait(bss, clientfd, buffer, length);
+              CHECK_ERROR(ret < 0);
+            }
+            
+						ret = sendwait(bss, clientfd, buffer, length);
 						CHECK_ERROR(ret < 0)
 					}
 
